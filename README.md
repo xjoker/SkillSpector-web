@@ -120,6 +120,22 @@ skillspector scan https://github.com/user/my-skill
 skillspector scan ./my-skill.zip
 ```
 
+### Web UI
+
+Run the local upload interface:
+
+```bash
+skillspector-web --host 127.0.0.1 --port 8765 --max-upload-mb 50
+```
+
+Open `http://127.0.0.1:8765`, upload a zip or file, and run a static scan by default.
+The page can override provider, model, meta-analyzer model, API key, and OpenAI-compatible
+base URL for that scan. API keys are used only for the request and are not stored in scan
+history. For local OpenAI-compatible models that do not return native structured output,
+choose `text_json` in the Structured output field and keep LLM concurrency at `1` for
+single-threaded local inference. `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` sets the default
+upload limit.
+
 ### Output Formats
 
 ```bash

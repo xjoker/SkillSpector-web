@@ -352,6 +352,67 @@ class TestRawStringMode:
 
         assert results[0][1] == ["async chunk"]
 
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    async def test_env_concurrency_one_serializes_async_calls(self, monkeypatch) -> None:
+        import asyncio
+
+        monkeypatch.setenv("SKILLSPECTOR_LLM_MAX_CONCURRENCY", "1")
+        analyzer = _RawTextAnalyzer(base_prompt="test", model=self.MODEL)
+        current = 0
+        max_seen = 0
+
+        async def _ainvoke(_prompt: str) -> AIMessage:
+            nonlocal current, max_seen
+            current += 1
+            max_seen = max(max_seen, current)
+            await asyncio.sleep(0.01)
+            current -= 1
+            return AIMessage(content="ok")
+
+        analyzer._llm.ainvoke = _ainvoke
+        batches = [Batch(file_path=f"f{i}.py", content="code") for i in range(3)]
+
+        results = await asyncio.wait_for(analyzer.arun_batches(batches), timeout=1)
+
+        assert len(results) == 3
+        assert max_seen == 1
+
+
+# ---------------------------------------------------------------------------
+# LLMAnalyzerBase text-json compatibility mode
+# ---------------------------------------------------------------------------
+
+
+class TestTextJsonMode:
+    MODEL = "local-model"
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    def test_run_batches_parses_json_from_raw_text(self, monkeypatch) -> None:
+        monkeypatch.setenv("SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD", "text_json")
+        analyzer = LLMAnalyzerBase(base_prompt="test", model=self.MODEL)
+        analyzer._llm.invoke.return_value = AIMessage(
+            content='Reasoning omitted.\n```json\n{"findings":[{"rule_id":"R1","message":"hit","severity":"HIGH","start_line":2}]}\n```'
+        )
+
+        results = analyzer.run_batches([Batch(file_path="a.py", content="code")])
+
+        assert analyzer._structured_llm is None
+        assert len(results[0][1]) == 1
+        assert results[0][1][0].rule_id == "R1"
+        assert results[0][1][0].file == "a.py"
+        assert "JSON Schema" in analyzer._llm.invoke.call_args.args[0]
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    async def test_arun_batches_parses_json_from_raw_text(self, monkeypatch) -> None:
+        monkeypatch.setenv("SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD", "text-json")
+        analyzer = LLMAnalyzerBase(base_prompt="test", model=self.MODEL)
+        analyzer._llm.ainvoke = AsyncMock(return_value=AIMessage(content='{"findings":[]}'))
+
+        results = await analyzer.arun_batches([Batch(file_path="a.py", content="code")])
+
+        assert results[0][1] == []
+        assert "JSON Schema" in analyzer._llm.ainvoke.call_args.args[0]
+
 
 # ---------------------------------------------------------------------------
 # LLMAnalyzerBase.arun_batches (async parallel execution)

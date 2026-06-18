@@ -34,6 +34,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
 from skillspector.constants import MODEL_CONFIG
+from skillspector.llm_limiter import llm_call_gate
 from skillspector.model_info import get_max_input_tokens, get_max_output_tokens
 from skillspector.providers import (
     create_chat_model,
@@ -88,7 +89,8 @@ def get_chat_model(model: str | None = None) -> BaseChatModel:
 def chat_completion(prompt: str, *, model: str | None = None) -> str:
     """Request a single chat completion and return the assistant text."""
     llm = get_chat_model(model=model)
-    response = llm.invoke(prompt)
+    with llm_call_gate():
+        response = llm.invoke(prompt)
     if not isinstance(response, BaseMessage):
         raise TypeError(f"Expected BaseMessage from chat model, got {type(response).__name__}")
     return str(response.text)

@@ -60,6 +60,7 @@ dev = [
 
 [project.scripts]
 skillspector = "skillspector.cli:app"
+skillspector-web = "skillspector.web:app"
 
 [project.urls]
 Homepage = "https://github.com/NVIDIA/skillspector"

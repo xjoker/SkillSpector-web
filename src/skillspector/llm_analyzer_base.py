@@ -28,6 +28,8 @@ to ``None`` for raw-string mode.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Literal
@@ -35,6 +37,7 @@ from typing import Literal
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 
+from skillspector.llm_limiter import async_llm_call_gate, get_llm_max_concurrency, llm_call_gate
 from skillspector.llm_utils import get_chat_model
 from skillspector.logging_config import get_logger
 from skillspector.model_info import get_max_input_tokens
@@ -45,6 +48,8 @@ logger = get_logger(__name__)
 # OpenAI suggests ~4 chars per token for English text with BPE tokenizers.
 CHARS_PER_TOKEN = 4
 CHUNK_OVERLAP_LINES = 50
+STRUCTURED_OUTPUT_METHOD_ENV = "SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD"
+STRUCTURED_OUTPUT_METHODS = {"json_schema", "json_mode", "function_calling", "text_json"}
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +204,41 @@ def _message_text(response: object) -> str:
     return str(response.text)
 
 
+def _structured_output_method() -> str:
+    raw = os.environ.get(STRUCTURED_OUTPUT_METHOD_ENV, "json_schema").strip().lower()
+    method = raw.replace("-", "_") or "json_schema"
+    if method not in STRUCTURED_OUTPUT_METHODS:
+        raise ValueError(
+            f"Unsupported {STRUCTURED_OUTPUT_METHOD_ENV}: {raw}. "
+            f"Expected one of: {', '.join(sorted(STRUCTURED_OUTPUT_METHODS))}"
+        )
+    return method
+
+
+def _json_from_text(text: str) -> object:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        first_newline = cleaned.find("\n")
+        if first_newline != -1:
+            cleaned = cleaned[first_newline + 1 :]
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3].rstrip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for idx, char in enumerate(cleaned):
+            if char not in "[{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(cleaned[idx:])
+                return value
+            except json.JSONDecodeError:
+                continue
+        raise
+
+
 BASE_ANALYSIS_PROMPT = """\
 {analyzer_prompt}
 
@@ -249,8 +289,14 @@ class LLMAnalyzerBase:
         self.model = model
         self._input_budget = get_max_input_tokens(model)
         self._llm = get_chat_model(model=model)
+        self._structured_output_method = _structured_output_method()
         self._structured_llm = (
-            self._llm.with_structured_output(self.response_schema) if self.response_schema else None
+            self._llm.with_structured_output(
+                self.response_schema,
+                method=self._structured_output_method,
+            )
+            if self.response_schema and self._structured_output_method != "text_json"
+            else None
         )
 
     # -- Batching -----------------------------------------------------------
@@ -325,6 +371,22 @@ class LLMAnalyzerBase:
             numbered_content=numbered,
         )
 
+    def _text_json_prompt(self, prompt: str) -> str:
+        if self.response_schema is None:
+            return prompt
+        schema = json.dumps(self.response_schema.model_json_schema(), ensure_ascii=False)
+        return (
+            f"{prompt}\n\n## Structured output\n"
+            "Return one valid JSON object only. Do not wrap it in markdown fences. "
+            "The JSON object must match this JSON Schema:\n"
+            f"{schema}"
+        )
+
+    def _parse_text_json_response(self, response_text: str) -> object:
+        if self.response_schema is None:
+            return response_text
+        return self.response_schema.model_validate(_json_from_text(response_text))
+
     def parse_response(self, response: object, batch: Batch) -> list[Finding]:
         """Parse the LLM response for a single batch.
 
@@ -360,10 +422,16 @@ class LLMAnalyzerBase:
                 estimate_tokens(prompt),
                 len(batch.findings),
             )
-            if self._structured_llm:
-                response = self._structured_llm.invoke(prompt)
-            else:
-                response = _message_text(self._llm.invoke(prompt))
+            with llm_call_gate():
+                if self._structured_llm:
+                    response = self._structured_llm.invoke(prompt)
+                else:
+                    raw_text = _message_text(self._llm.invoke(self._text_json_prompt(prompt)))
+                    response = (
+                        self._parse_text_json_response(raw_text)
+                        if self._structured_output_method == "text_json"
+                        else raw_text
+                    )
             logger.debug("LLM response for %s", batch.file_label)
             parsed = self.parse_response(response, batch)
             results.append((batch, parsed))
@@ -373,7 +441,7 @@ class LLMAnalyzerBase:
         self,
         batches: list[Batch],
         *,
-        max_concurrency: int = 10,
+        max_concurrency: int | None = None,
         **kwargs: object,
     ) -> list[tuple[Batch, list]]:
         """Execute LLM calls for all *batches* concurrently.
@@ -384,7 +452,8 @@ class LLMAnalyzerBase:
 
         The return type mirrors :meth:`run_batches`.
         """
-        sem = asyncio.Semaphore(max_concurrency)
+        effective_concurrency = get_llm_max_concurrency(max_concurrency)
+        sem = asyncio.Semaphore(effective_concurrency)
 
         async def _process(batch: Batch) -> tuple[Batch, list]:
             async with sem:
@@ -395,10 +464,18 @@ class LLMAnalyzerBase:
                     estimate_tokens(prompt),
                     len(batch.findings),
                 )
-                if self._structured_llm:
-                    response = await self._structured_llm.ainvoke(prompt)
-                else:
-                    response = _message_text(await self._llm.ainvoke(prompt))
+                async with async_llm_call_gate(effective_concurrency):
+                    if self._structured_llm:
+                        response = await self._structured_llm.ainvoke(prompt)
+                    else:
+                        raw_text = _message_text(
+                            await self._llm.ainvoke(self._text_json_prompt(prompt))
+                        )
+                        response = (
+                            self._parse_text_json_response(raw_text)
+                            if self._structured_output_method == "text_json"
+                            else raw_text
+                        )
                 logger.debug("LLM response for %s", batch.file_label)
                 return (batch, self.parse_response(response, batch))
 
