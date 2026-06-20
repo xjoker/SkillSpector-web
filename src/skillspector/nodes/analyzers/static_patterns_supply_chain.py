@@ -396,7 +396,7 @@ def _extract_packages_from_requirements(content: str) -> list[tuple[str, str | N
         m = re.match(r"^([a-zA-Z][a-zA-Z0-9._-]*)(?:\[.*?\])?\s*(?:([=<>!~]=?)\s*([\d.*]+))?", line)
         if m:
             name = m.group(1)
-            version = m.group(3) if m.group(2) in ("==", "<=") else None
+            version = m.group(3) if m.group(2) else None
             results.append((name, version, i))
     return results
 
