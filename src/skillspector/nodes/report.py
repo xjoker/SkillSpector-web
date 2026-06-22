@@ -34,6 +34,7 @@ from skillspector import __version__ as skillspector_version
 from skillspector.llm_utils import is_llm_available
 from skillspector.logging_config import get_logger
 from skillspector.models import Finding
+from skillspector.nodes.deduplicate import deduplicate
 from skillspector.sarif_models import (
     SARIF_SCHEMA_URI,
     SarifArtifactLocation,
@@ -376,12 +377,12 @@ def _format_markdown(
 
 def report(state: SkillspectorState) -> dict[str, object]:
     """Generate SARIF, compute risk score, and set report_body from output_format."""
-    findings = state.get("filtered_findings", state.get("findings", []))
+    raw_findings = state.get("filtered_findings", state.get("findings", []))
     # When use_llm is False, meta_analyzer is skipped; ensure final state has filtered_findings
     if "filtered_findings" not in state:
-        filtered_findings = state.get("findings", [])
-    else:
-        filtered_findings = findings
+        raw_findings = state.get("findings", [])
+    findings = deduplicate(raw_findings)
+    filtered_findings = findings
     component_metadata = state.get("component_metadata") or []
     has_executable_scripts = state.get("has_executable_scripts", False)
     manifest = state.get("manifest") or {}
