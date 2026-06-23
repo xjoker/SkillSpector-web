@@ -105,6 +105,7 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     "AST6": "compile() creates code objects from strings. When combined with exec()/eval(), it enables obfuscated code execution.",
     "AST7": "Dynamic getattr() with a non-literal attribute name can access arbitrary object attributes, potentially bypassing access controls.",
     "AST8": "A dangerous execution chain combines code execution (exec/eval) with a dynamic source (network, encoded data, dynamic import), creating a high-confidence attack vector.",
+    "AST9": "Reflective access to an execution sink via getattr() with a constant name (e.g. getattr(os, 'system'), getattr(builtins, 'exec')) is functionally identical to a direct exec/os.system call but evades name-based detection. This is a deliberate evasion technique rather than idiomatic code.",
     # YARA (B.1.12)
     "YR1": "YARA rule matched a known malware signature (reverse shell, backdoor, ransomware, C2 framework, or info stealer).",
     "YR2": "YARA rule matched a known webshell pattern (PHP, Python, JSP, or ASPX webshell).",
@@ -318,6 +319,7 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     "AST6": "Avoid compile() with dynamic strings. If code generation is needed, use templates or AST manipulation with strict validation.",
     "AST7": "Replace dynamic getattr() with explicit attribute access or a dictionary lookup with an allowlist of permitted attributes.",
     "AST8": "Remove the execution chain entirely. Never pass network data, decoded bytes, or dynamically imported code to exec()/eval(). Use structured data formats instead.",
+    "AST9": "Call the function directly instead of reflectively (write exec(...) / os.system(...) explicitly), or remove it. If reflection is genuinely required, restrict it to an allowlist of safe attribute names that excludes execution sinks.",
     # Behavioral Taint Tracking (B.2.2)
     "TT1": "Add validation or sanitization between the data source and sink. Never pass raw source data directly to a sink without checking its content.",
     "TT2": "Validate tainted variables before passing them to sinks. Use allowlists, type checks, or sanitization functions on data from external sources.",

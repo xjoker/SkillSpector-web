@@ -120,6 +120,44 @@ class TestDynamicGetattr:
         assert not any(f.rule_id == "AST7" for f in findings)
 
 
+class TestReflectiveGetattrExec:
+    """getattr(obj, "<sink>")(...) is a reflective handle on an exec/os sink.
+
+    It evades AST1/AST5 (the inner getattr has a *constant* name so AST7 is skipped,
+    and the outer call's func is an ast.Call whose name does not resolve), so it must
+    be caught directly as AST9.
+    """
+
+    def test_getattr_os_system_produces_ast9(self):
+        findings = _run("import os\ngetattr(os, 'system')('id')")
+        ast9 = [f for f in findings if f.rule_id == "AST9"]
+        assert len(ast9) == 1
+        assert ast9[0].severity == "HIGH"
+
+    def test_getattr_builtins_exec_produces_ast9(self):
+        findings = _run("import builtins\ngetattr(builtins, 'exec')(payload)")
+        assert any(f.rule_id == "AST9" for f in findings)
+
+    def test_getattr_eval_double_quotes_produces_ast9(self):
+        findings = _run('import builtins\ngetattr(builtins, "eval")("2+2")')
+        assert any(f.rule_id == "AST9" for f in findings)
+
+    def test_getattr_os_popen_produces_ast9(self):
+        findings = _run("import os\nhandle = getattr(os, 'popen')('whoami')")
+        assert any(f.rule_id == "AST9" for f in findings)
+
+    def test_reflective_getattr_does_not_emit_ast7(self):
+        # A constant name must not also trip the non-literal AST7 rule.
+        findings = _run("import os\ngetattr(os, 'system')('id')")
+        assert not any(f.rule_id == "AST7" for f in findings)
+
+    def test_benign_constant_attr_no_ast9(self):
+        # Common, safe reflective access must stay unflagged (near-zero false positives).
+        for name in ("name", "timeout", "value", "data", "run", "compile"):
+            findings = _run(f"v = getattr(config, '{name}')")
+            assert not any(f.rule_id == "AST9" for f in findings), name
+
+
 class TestDangerousChains:
     def test_exec_compile_chain_produces_ast8(self):
         code = 'exec(compile("x = 1", "<string>", "exec"))'
