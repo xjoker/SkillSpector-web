@@ -186,7 +186,7 @@ class TestRunStaticPatternsSupplyChain:
         assert sc2[0].severity == "HIGH"
 
 
-class TestRunStaticPatternsAgentSnooping:
+class TestRunStaticPatternsAgentSnoopingAdditional:
     """run_static_patterns with agent_snooping: AS1, AS2, AS3."""
 
     def test_as1_agent_config_dir_access_python(self):
@@ -302,14 +302,14 @@ class TestRunStaticPatternsAgentSnooping:
         findings = static_runner.run_static_patterns(state, [agent_snooping_module])
         assert any(f.rule_id == "AS3" for f in findings)
 
-    def test_no_same_line_duplicate(self):
-        """A line matching one rule twice yields a single finding (built-in dedup)."""
+    def test_same_line_distinct_matches_preserved(self):
+        """Distinct same-line config reads are preserved as separate findings."""
         state = {
             "components": ["s.py"],
-            "file_cache": {"s.py": 'open("/Users/x/.claude/.codex/note")\n'},
+            "file_cache": {"s.py": 'open(".claude/settings.json"); open(".codex/config.json")\n'},
         }
         findings = static_runner.run_static_patterns(state, [agent_snooping_module])
-        assert len([f for f in findings if f.rule_id == "AS1"]) == 1
+        assert len([f for f in findings if f.rule_id == "AS1"]) == 2
 
     def test_normal_file_access_not_flagged(self):
         """Ordinary project file access produces no agent-snooping finding."""

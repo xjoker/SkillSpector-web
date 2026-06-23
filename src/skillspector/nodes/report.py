@@ -325,9 +325,7 @@ def _build_analysis_completeness(
 
     findings_dropped = len(findings_pre_filter) - len(findings_post_filter)
     if findings_dropped > 0:
-        limitations.append(
-            f"{findings_dropped} finding(s) filtered by meta-analyzer or heuristics"
-        )
+        limitations.append(f"{findings_dropped} finding(s) filtered by meta-analyzer or heuristics")
 
     completeness: dict[str, object] = {
         "total_components": total_components,
@@ -456,9 +454,9 @@ def _format_markdown(
 
 def report(state: SkillspectorState) -> dict[str, object]:
     """Generate SARIF, compute risk score, and set report_body from output_format."""
-    raw_findings = state.get("filtered_findings", state.get("findings", []))
-    findings_for_scoring = deduplicate(raw_findings)
-    filtered_findings = raw_findings
+    raw_findings = state.get("findings", [])
+    filtered_findings = state.get("filtered_findings", raw_findings)
+    findings_for_scoring = deduplicate(filtered_findings)
     component_metadata = state.get("component_metadata") or []
     components = state.get("components") or []
     file_cache = state.get("file_cache") or {}

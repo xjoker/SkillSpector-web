@@ -67,6 +67,16 @@ class MetaAnalyzerFinding(BaseModel):
     # minimum/maximum, which some OpenAI-compatible structured-output endpoints
     # reject. The range is enforced by the validator below instead.
     confidence: float = Field(description="Confidence score between 0.0 and 1.0")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, v: object) -> float:
+        # Accept 0-100 scale values from some models, then clamp into [0, 1].
+        v = float(v)
+        if v > 2.0:
+            v = v / 100.0
+        return min(1.0, max(0.0, v))
+
     intent: Literal["malicious", "negligent", "benign"] = Field(
         description="Likely intent behind the finding"
     )
@@ -75,15 +85,6 @@ class MetaAnalyzerFinding(BaseModel):
     )
     explanation: str = Field(default="", description="Why this is dangerous (2-3 sentences)")
     remediation: str = Field(default="", description="How to fix the issue (actionable steps)")
-
-    @field_validator("confidence", mode="before")
-    @classmethod
-    def _normalize_confidence(cls, v: object) -> float:
-        """Accept 0-100 scale (e.g. from Ollama) and normalize to [0, 1]."""
-        v = float(v)  # raises TypeError/ValueError for non-numeric inputs
-        if v > 1.0:
-            v = v / 100.0
-        return max(0.0, min(1.0, v))
 
 
 class OverallAssessment(BaseModel):
