@@ -449,3 +449,53 @@ class TestHelpers:
         msg = static_yara._build_message("my_rule", "default", None)
         assert "my_rule" in msg
         assert "[default]" not in msg
+
+
+class TestContentHashInvalidation:
+    """Cache invalidation uses file content, not just size."""
+
+    def test_same_size_different_content_invalidates(self, tmp_path):
+        """Editing a rule file to same-length content must produce a different hash."""
+        rule_file = tmp_path / "test.yar"
+        rule_file.write_text("rule aaa { condition: true  }")
+        files = [rule_file]
+        h1 = static_yara._content_hash(files)
+
+        rule_file.write_text("rule bbb { condition: false }")
+        assert rule_file.stat().st_size == len("rule aaa { condition: true  }")
+        h2 = static_yara._content_hash(files)
+
+        assert h1 != h2, "Hash must change when content changes even if size is the same"
+
+    def test_identical_content_produces_same_hash(self, tmp_path):
+        """Unchanged file content must produce the same hash."""
+        rule_file = tmp_path / "stable.yar"
+        rule_file.write_text("rule stable { condition: true }")
+        files = [rule_file]
+        h1 = static_yara._content_hash(files)
+        h2 = static_yara._content_hash(files)
+        assert h1 == h2
+
+    def test_cache_serves_fresh_rules_after_edit(self, tmp_path):
+        """_load_rules recompiles when a rule file is edited to same-length content."""
+        rule_v1 = 'rule marker { strings: $a = "AAAA" condition: $a }'
+        rule_v2 = 'rule marker { strings: $a = "BBBB" condition: $a }'
+        assert len(rule_v1) == len(rule_v2)
+
+        rule_file = tmp_path / "marker.yar"
+        rule_file.write_text(rule_v1)
+
+        rules_v1 = static_yara._load_rules(tmp_path)
+        assert rules_v1 is not None
+
+        rule_file.write_text(rule_v2)
+        rules_v2 = static_yara._load_rules(tmp_path)
+        assert rules_v2 is not None
+
+        content_with_a = 'AAAA is here'
+        content_with_b = 'BBBB is here'
+
+        matches_a = rules_v2.match(data=content_with_a.encode())
+        matches_b = rules_v2.match(data=content_with_b.encode())
+        assert len(matches_a) == 0, "v2 rules should not match AAAA"
+        assert len(matches_b) >= 1, "v2 rules should match BBBB"
