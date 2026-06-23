@@ -272,6 +272,54 @@ def _build_metadata(has_executable_scripts: bool, use_llm: bool) -> dict[str, ob
     return meta
 
 
+def _build_analysis_completeness(
+    components: list[str],
+    file_cache: dict[str, str],
+    use_llm: bool,
+    findings_pre_filter: list[Finding],
+    findings_post_filter: list[Finding],
+) -> dict[str, object]:
+    """Build analysis_completeness section indicating scan coverage and limitations.
+
+    Helps consumers understand what was NOT analyzed and whether findings
+    can be trusted as comprehensive.
+    """
+    total_components = len(components)
+    scanned_components = sum(1 for c in components if c in file_cache)
+
+    llm_available, llm_error = is_llm_available()
+    llm_used = use_llm and llm_available
+
+    limitations: list[str] = []
+    if scanned_components < total_components:
+        skipped = total_components - scanned_components
+        limitations.append(f"{skipped} component(s) had no content in file_cache (skipped)")
+    if use_llm and not llm_available:
+        limitations.append(f"LLM meta-analysis unavailable: {llm_error or 'unknown reason'}")
+    if not use_llm:
+        limitations.append("LLM meta-analysis was disabled (--no-llm)")
+
+    findings_dropped = len(findings_pre_filter) - len(findings_post_filter)
+    if findings_dropped > 0:
+        limitations.append(
+            f"{findings_dropped} finding(s) filtered by meta-analyzer or heuristics"
+        )
+
+    completeness: dict[str, object] = {
+        "total_components": total_components,
+        "scanned_components": scanned_components,
+        "coverage_percent": round(scanned_components / total_components * 100, 1)
+        if total_components > 0
+        else 100.0,
+        "llm_analysis": "applied" if llm_used else "skipped",
+        "findings_before_filtering": len(findings_pre_filter),
+        "findings_after_filtering": len(findings_post_filter),
+        "limitations": limitations if limitations else None,
+        "is_complete": len(limitations) == 0,
+    }
+    return completeness
+
+
 def _format_json(
     findings: list[Finding],
     component_metadata: list[dict[str, object]],
@@ -282,6 +330,7 @@ def _format_json(
     risk_recommendation: str,
     has_executable_scripts: bool,
     use_llm: bool = True,
+    analysis_completeness: dict[str, object] | None = None,
 ) -> str:
     """Generate JSON report string."""
     skill_name = (manifest.get("name") or "unknown") if manifest else "unknown"
@@ -309,6 +358,8 @@ def _format_json(
         "issues": [f.to_dict() for f in findings],
         "metadata": _build_metadata(has_executable_scripts, use_llm),
     }
+    if analysis_completeness is not None:
+        data["analysis_completeness"] = analysis_completeness
     return json.dumps(data, indent=2)
 
 
@@ -382,11 +433,11 @@ def _format_markdown(
 def report(state: SkillspectorState) -> dict[str, object]:
     """Generate SARIF, compute risk score, and set report_body from output_format."""
     raw_findings = state.get("filtered_findings", state.get("findings", []))
-    if "filtered_findings" not in state:
-        raw_findings = state.get("findings", [])
     findings_for_scoring = deduplicate(raw_findings)
     filtered_findings = raw_findings
     component_metadata = state.get("component_metadata") or []
+    components = state.get("components") or []
+    file_cache = state.get("file_cache") or {}
     has_executable_scripts = state.get("has_executable_scripts", False)
     manifest = state.get("manifest") or {}
     skill_path = state.get("skill_path")
@@ -397,6 +448,9 @@ def report(state: SkillspectorState) -> dict[str, object]:
         findings_for_scoring, has_executable_scripts
     )
     sarif_report = _build_sarif(filtered_findings)
+    analysis_completeness = _build_analysis_completeness(
+        components, file_cache, use_llm, raw_findings, filtered_findings
+    )
 
     if output_format == "terminal":
         report_body = _format_terminal(
@@ -420,6 +474,7 @@ def report(state: SkillspectorState) -> dict[str, object]:
             risk_recommendation,
             has_executable_scripts,
             use_llm=use_llm,
+            analysis_completeness=analysis_completeness,
         )
     elif output_format == "markdown":
         report_body = _format_markdown(
