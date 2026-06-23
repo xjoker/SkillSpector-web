@@ -215,8 +215,70 @@ def _format_findings_for_prompt(findings: list[Finding]) -> str:
     return "\n".join(lines)
 
 
+_NO_LLM_CONFIDENCE_THRESHOLD = 0.4
+_HIGH_SEVERITY_PASS_THROUGH = frozenset({"CRITICAL", "HIGH"})
+_CODE_EXAMPLE_DOWNWEIGHT = 0.5
+
+
 def _fallback_filtered(findings: list[Finding]) -> list[Finding]:
-    """Apply default remediation to all findings (pass-through with defaults)."""
+    """Heuristic fallback filter for --no-llm mode.
+
+    Applies rule-based filtering when LLM analysis is unavailable:
+    1. Drop findings with confidence below threshold (0.4), UNLESS severity
+       is CRITICAL or HIGH (high-severity findings are never dropped on
+       confidence alone)
+    2. Downweight findings whose context matches code-example indicators
+       (0.5x confidence reduction) — never hard-drop, as there is no LLM
+       safety net in this mode
+    3. Apply default remediations from pattern_defaults
+    """
+    from skillspector.nodes.analyzers.common import is_code_example
+
+    result: list[Finding] = []
+    for f in findings:
+        severity_upper = f.severity.upper()
+        confidence = f.confidence
+        if f.context and is_code_example(f.context):
+            confidence *= _CODE_EXAMPLE_DOWNWEIGHT
+        if confidence < _NO_LLM_CONFIDENCE_THRESHOLD:
+            if severity_upper not in _HIGH_SEVERITY_PASS_THROUGH:
+                continue
+        result.append(
+            Finding(
+                rule_id=f.rule_id,
+                message=f.message,
+                severity=f.severity,
+                confidence=confidence,
+                file=f.file,
+                start_line=f.start_line,
+                end_line=f.end_line,
+                remediation=f.remediation or get_remediation(f.rule_id),
+                tags=f.tags,
+                context=f.context,
+                matched_text=f.matched_text,
+                category=getattr(f, "category", None),
+                pattern=getattr(f, "pattern", None),
+                finding=getattr(f, "finding", None),
+                explanation=getattr(f, "explanation", None),
+                code_snippet=getattr(f, "code_snippet", None) or f.context,
+                intent=None,
+            )
+        )
+    logger.info(
+        "Heuristic fallback filter (--no-llm): %d → %d findings",
+        len(findings),
+        len(result),
+    )
+    return result
+
+
+def _passthrough_with_defaults(findings: list[Finding]) -> list[Finding]:
+    """Pass all findings through with default remediations (fail-closed).
+
+    Used on LLM failure path: when the LLM call fails, we pass ALL findings
+    through unchanged (except adding default remediations). A security tool
+    should fail-closed — showing more findings is safer than silently dropping.
+    """
     return [
         Finding(
             rule_id=f.rule_id,
@@ -431,5 +493,5 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
     except ValueError:
         raise
     except Exception as e:
-        logger.warning("LLM call failed, using fallback: %s", e)
-        return {"filtered_findings": _fallback_filtered(findings)}
+        logger.warning("LLM call failed, passing all findings through (fail-closed): %s", e)
+        return {"filtered_findings": _passthrough_with_defaults(findings)}

@@ -256,12 +256,16 @@ def _format_terminal(
 def _build_metadata(has_executable_scripts: bool, use_llm: bool) -> dict[str, object]:
     """Build the metadata section shared by all output formats."""
     llm_available, llm_error = is_llm_available()
+    meta_analysis_applied = use_llm and llm_available
     meta: dict[str, object] = {
         "has_executable_scripts": has_executable_scripts,
         "skillspector_version": skillspector_version,
         "llm_requested": use_llm,
         "llm_available": llm_available,
+        "meta_analysis_applied": meta_analysis_applied,
     }
+    if not meta_analysis_applied:
+        meta["filtering_mode"] = "heuristic"
     if use_llm and not llm_available:
         meta["llm_error"] = llm_error
     return meta
