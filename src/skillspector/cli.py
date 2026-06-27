@@ -440,7 +440,7 @@ def mcp(
         typer.Option(
             "--transport",
             "-t",
-            help="Transport: stdio for local CLI agents, http for remote/A2A callers.",
+            help="Transport: FastMCP stdio for local CLI agents, http for remote/A2A callers.",
             case_sensitive=False,
         ),
     ] = TransportChoice.stdio,
@@ -460,12 +460,13 @@ def mcp(
     Codex CLI, Gemini CLI) or remote runtime can scan a skill and gate installs
     on the verdict.
 
+    Requires the optional mcp extra. Reinstall the GitHub tool package with
+    that extra enabled, as shown in the README Quick Start section.
+
     Examples:
 
-        skillspector mcp                      # stdio (local agents)
+        skillspector mcp                      # FastMCP stdio for local CLI agents
         skillspector mcp --transport http --port 8000
-
-    Requires the optional ``mcp`` dependency: pip install "skillspector[mcp]".
     """
     try:
         from skillspector.mcp_server import run as run_mcp

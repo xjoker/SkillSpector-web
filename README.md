@@ -32,11 +32,17 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 
 Create and activate a virtual environment first (all `make` targets assume the venv is active). Use **uv** or **pip**; the Makefile uses `uv` if available, otherwise `pip`.
 
-**Quick install with uv (no clone required):**
+**Quick install with uv (CLI-only):**
 
 ```bash
 uv tool install git+https://github.com/NVIDIA/skillspector.git
 # Update later: uv tool update skillspector
+```
+
+If you plan to run `skillspector mcp`, install the MCP extra at install time:
+
+```bash
+uv tool install 'skillspector[mcp] @ git+https://github.com/NVIDIA/skillspector.git'
 ```
 
 **From source:**
@@ -228,16 +234,21 @@ runtime can call scanning as a tool and **gate skill/MCP installs on the
 result** — turning SkillSpector into a runtime guardrail instead of an
 out-of-band audit step.
 
-```bash
-# Install the optional MCP dependency
-pip install "skillspector[mcp]"
+`skillspector mcp` requires `skillspector[mcp]`.
 
-# stdio transport — for local CLI agents
+```bash
+# Install, or reinstall if you already used the CLI-only path
+uv tool install --force 'skillspector[mcp] @ git+https://github.com/NVIDIA/skillspector.git'
+
+# FastMCP stdio transport for local CLI agents
 skillspector mcp
 
-# streamable HTTP/SSE transport — for remote / A2A callers
+# streamable HTTP/SSE transport for remote / A2A callers
 skillspector mcp --transport http --host 127.0.0.1 --port 8000
 ```
+
+The stdio transport is the current FastMCP path for local CLI agents, and the
+initialize hang reported in issue #199 still applies there.
 
 The server exposes a single tool:
 
