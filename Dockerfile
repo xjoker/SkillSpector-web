@@ -1,13 +1,20 @@
 # syntax=docker/dockerfile:1.7
 
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.12-slim-bookworm AS deps
 
 WORKDIR /app
-COPY pyproject.toml README.md VERSION ./
-COPY src/ src/
+COPY pyproject.toml ./
 RUN python -m venv .venv
 RUN --mount=type=cache,target=/root/.cache/pip \
-    .venv/bin/pip install --retries 10 --timeout 120 '.[mcp]'
+    python -c "import pathlib, tomllib; data = tomllib.loads(pathlib.Path('pyproject.toml').read_text()); reqs = data['build-system']['requires'] + data['project']['dependencies'] + data['project']['optional-dependencies']['mcp']; pathlib.Path('/tmp/requirements.txt').write_text('\n'.join(reqs) + '\n')" \
+    && .venv/bin/pip install --retries 10 --timeout 120 --disable-pip-version-check -r /tmp/requirements.txt
+
+FROM deps AS builder
+
+COPY README.md VERSION ./
+COPY src/ src/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    .venv/bin/pip install --no-deps --no-build-isolation --disable-pip-version-check .
 
 FROM python:3.12-slim-bookworm
 

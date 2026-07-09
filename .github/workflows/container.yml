@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Container
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: container-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/skillspector-adapter
+  SCHEMA_VERSION: none
+
+jobs:
+  build-and-push:
+    name: Build and Push GHCR Image
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Read image metadata
+        id: meta
+        run: |
+          version="$(cat VERSION)"
+          git_commit="$(git rev-parse --short HEAD)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "git_commit=${git_commit}" >> "$GITHUB_OUTPUT"
+          echo "Building ${IMAGE_NAME}:${version} from ${git_commit}"
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Create buildx builder
+        run: |
+          docker buildx create --name skillspector-builder --driver docker-container --use
+          docker buildx inspect --bootstrap
+
+      - name: Build and push image
+        run: |
+          docker buildx build \
+            --platform=linux/amd64 \
+            --build-arg SKILLSPECTOR_GIT_COMMIT="${{ steps.meta.outputs.git_commit }}" \
+            --build-arg SKILLSPECTOR_SCHEMA_VERSION="${SCHEMA_VERSION}" \
+            --build-arg SKILLSPECTOR_RELEASE_VERSION="${{ steps.meta.outputs.version }}" \
+            --cache-from type=registry,ref="${IMAGE_NAME}:buildcache" \
+            --cache-to type=registry,ref="${IMAGE_NAME}:buildcache",mode=max \
+            --tag "${IMAGE_NAME}:${{ steps.meta.outputs.version }}" \
+            --tag "${IMAGE_NAME}:dev" \
+            --tag "${IMAGE_NAME}:latest" \
+            --push \
+            .
+
+      - name: Verify pushed image health metadata
+        run: |
+          image="${IMAGE_NAME}:${{ steps.meta.outputs.version }}"
+          container="skillspector-verify-${GITHUB_RUN_ID}"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+
+          docker pull "$image"
+          docker run -d --name "$container" \
+            -e SKILLSPECTOR_AUTH_TOKEN=verify-token \
+            "$image" web --port 8477
+
+          docker exec "$container" python -c \
+            "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8477/health', timeout=5)); assert data['ok'] is True, data; assert data['release_version'] == '${{ steps.meta.outputs.version }}', data; assert data['git_commit'] == '${{ steps.meta.outputs.git_commit }}', data; assert data['schema_version'] == '${SCHEMA_VERSION}', data; print(json.dumps(data, sort_keys=True))"

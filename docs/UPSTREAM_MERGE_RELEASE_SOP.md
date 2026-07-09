@@ -195,7 +195,7 @@ printf '%s\n' 20260709.1 > VERSION
 git diff -- VERSION docker-compose.yml docs/ADAPTER_DEPLOYMENT.md
 ```
 
-## 6. 构建 release 镜像
+## 6. 本地镜像冒烟
 
 先确认工作区状态。如果还未 commit，构建出的 `/health.git_commit` 会带 `-dirty`，只能用于本地测试：
 
@@ -203,10 +203,11 @@ git diff -- VERSION docker-compose.yml docs/ADAPTER_DEPLOYMENT.md
 git status --short --branch
 ```
 
-本地 release 构建：
+本地构建只用于调试和 smoke，不作为正式发布推送入口：
 
 ```bash
 make docker-release-build
+make docker-smoke
 ```
 
 该命令会构建 `linux/amd64`，并同时打 tag：
@@ -225,12 +226,6 @@ docker image ls ghcr.io/xjoker/skillspector-adapter --format '{{.Repository}}:{{
   | sort
 ```
 
-冒烟：
-
-```bash
-make docker-smoke
-```
-
 `make docker-smoke` 必须覆盖：
 
 - CLI `--version`
@@ -242,29 +237,23 @@ make docker-smoke
 - Bearer API 鉴权
 - ticket 创建、PUT 上传、扫描、报告读取
 
-## 7. Commit 与干净重建
+## 7. Commit 与线上构建
 
-发布镜像前建议先 commit，再重建一次，确保 `/health.git_commit` 是干净 commit：
+发布镜像前必须先 commit 并推送，让 GitHub Actions 构建干净 commit：
 
 ```bash
 git status --short --branch
 git add <changed-files>
 git commit -m "release: upstream merge and adapter image YYYYMMDD.N"
-make docker-release-build
-make docker-smoke
+git push origin main
 ```
 
-检查 `/health`：
+`CI` workflow 成功后会自动触发 `Container` workflow。`Container` workflow 会：
 
-```bash
-docker run -d --name skillspector-health-check \
-  -e SKILLSPECTOR_AUTH_TOKEN=health-token \
-  ghcr.io/xjoker/skillspector-adapter:$(cat VERSION) web --port 8477
-
-docker exec skillspector-health-check python -c 'import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen("http://127.0.0.1:8477/health", timeout=3)), sort_keys=True))'
-
-docker rm -f skillspector-health-check
-```
+- 使用 `GITHUB_TOKEN` 推送 GHCR 镜像。
+- 推送 `ghcr.io/xjoker/skillspector-adapter:<VERSION>`、`:dev`、`:latest`。
+- 使用 `ghcr.io/xjoker/skillspector-adapter:buildcache` 作为 buildx registry cache。
+- 拉取刚推送的镜像并检查 `/health`。
 
 要求：
 
@@ -272,21 +261,11 @@ docker rm -f skillspector-health-check
 - `git_commit` 等于当前 commit 短 hash，且不带 `-dirty`
 - `schema_version` 等于本次构建传入值，默认 `none`
 
-## 8. 推送镜像
-
-`docker push` 属于发布动作，执行前必须有明确确认。
-
-```bash
-VERSION=$(cat VERSION)
-docker push ghcr.io/xjoker/skillspector-adapter:${VERSION}
-docker push ghcr.io/xjoker/skillspector-adapter:dev
-docker push ghcr.io/xjoker/skillspector-adapter:latest
-```
-
-如果发布流程依赖 GitHub Actions：
+## 8. GitHub Actions 注意事项
 
 - 不要假设 `GITHUB_TOKEN` 创建的 tag 会触发另一个 `on: push: tags` workflow。
 - 需要链式触发时，用 `gh workflow run <workflow>` 显式触发。
+- 本 fork 的正式镜像发布入口是 `Container` workflow，不是本机 `docker push`。
 
 ## 9. 远端上线
 

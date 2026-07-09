@@ -12,6 +12,15 @@ ghcr.io/xjoker/skillspector-adapter:20260709.1
 
 本仓库根目录的 `VERSION` 是镜像 tag 的单一真相源。
 
+生产镜像由 GitHub Actions 的 `Container` workflow 构建并推送到 GHCR：
+
+- `CI` workflow 在 `main` push 成功后自动触发 `Container` workflow。
+- `Container` 使用 `GITHUB_TOKEN` 推送 `ghcr.io/xjoker/skillspector-adapter`。
+- 构建使用 registry cache：`ghcr.io/xjoker/skillspector-adapter:buildcache`。
+- 成功后会拉取刚推送的镜像并检查 `/health.release_version`、`/health.git_commit` 和 `/health.schema_version`。
+
+本地构建只用于调试和 smoke，不作为发布推送入口：
+
 ```bash
 cat VERSION
 make docker-release-build
@@ -33,13 +42,8 @@ skillspector
 - `git_commit`: 当前 commit，dirty tree 会带 `-dirty`
 - `schema_version`: `SCHEMA_VERSION` make 变量，默认 `none`
 
-推送镜像前必须显式获得确认：
-
-```bash
-docker push ghcr.io/xjoker/skillspector-adapter:20260709.1
-docker push ghcr.io/xjoker/skillspector-adapter:dev
-docker push ghcr.io/xjoker/skillspector-adapter:latest
-```
+不要从本机执行 `docker push` 发布镜像；需要重跑发布时，在 GitHub Actions 手动运行
+`Container` workflow。
 
 ## Web/API compose
 
