@@ -158,8 +158,8 @@ curl -sS \
 
 | 变量 | 必需 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `SKILLSPECTOR_AUTH_TOKEN` | 远程 Web/API 必需 | 空 | Web/API Bearer token；也可作为 MCP token 回退值。 |
-| `SKILLSPECTOR_API_USERNAME` / `SKILLSPECTOR_API_PASSWORD` | 浏览器访问建议 | 空 | Web/API Basic auth；用于浏览器登录弹窗。 |
+| `SKILLSPECTOR_API_USERNAME` / `SKILLSPECTOR_API_PASSWORD` | 浏览器访问建议 | 空 | Web/API Basic auth；用于浏览器登录弹窗。绑定到非 localhost 时可作为 Web/API 鉴权凭据。 |
+| `SKILLSPECTOR_AUTH_TOKEN` | API/MCP 客户端建议 | 空 | Web/API Bearer token；也可作为 MCP token 回退值。绑定到非 localhost 时，如果未设置 Basic auth，则必须设置。 |
 | `SKILLSPECTOR_MCP_AUTH_TOKEN` | 远程 MCP 建议 | 回退到 `SKILLSPECTOR_AUTH_TOKEN` | MCP 控制面 Bearer token。 |
 | `SKILLSPECTOR_MCP_UPLOAD_HOST` | 远程 MCP 数据面必配 | `127.0.0.1` | 上传数据面监听地址。 |
 | `SKILLSPECTOR_MCP_UPLOAD_PORT` | 远程 MCP 数据面必配 | `0` | 上传数据面监听端口；`0` 表示随机端口。 |

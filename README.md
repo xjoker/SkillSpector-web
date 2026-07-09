@@ -5,6 +5,16 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
+> [!NOTE]
+> This repository is a fork-maintained SkillSpector adapter variant. It keeps
+> the upstream scanner and CLI, and adds a remote upload Web/API service,
+> upload-ticket MCP adapter, Basic/Bearer auth, container metadata, and GHCR
+> release flow. If you are using this fork, start with the
+> [fork usage guide](FORK_README.md); use
+> [adapter deployment](docs/ADAPTER_DEPLOYMENT.md) for Docker Compose and
+> environment variables, and
+> [upstream merge release SOP](docs/UPSTREAM_MERGE_RELEASE_SOP.md) for releases.
+
 ## Overview
 
 AI agent skills (used by Claude Code, Codex CLI, Gemini CLI, etc.) execute with implicit trust and minimal vetting. Research shows that **26.1% of skills contain vulnerabilities** and **5.2% show likely malicious intent**.

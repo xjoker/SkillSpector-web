@@ -5,7 +5,7 @@
 当前测试镜像：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.3
+ghcr.io/xjoker/skillspector-adapter:20260709.4
 ```
 
 ## 构建镜像
@@ -31,7 +31,7 @@ make docker-smoke
 构建会同时打以下本地 tag：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.3
+ghcr.io/xjoker/skillspector-adapter:20260709.4
 ghcr.io/xjoker/skillspector-adapter:dev
 ghcr.io/xjoker/skillspector-adapter:latest
 skillspector
@@ -54,7 +54,7 @@ skillspector
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.3
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.4
     container_name: skillspector-adapter
     restart: unless-stopped
     cap_drop:
@@ -167,9 +167,9 @@ curl -sS \
 
 | 变量 | 必需 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `SKILLSPECTOR_AUTH_TOKEN` | 远程 Web/API 必需 | 空 | Web/API Bearer token。绑定到非 localhost 时必须配置。 |
-| `SKILLSPECTOR_API_USERNAME` | 可选 | 空 | Basic auth 用户名。需要与 `SKILLSPECTOR_API_PASSWORD` 同时设置。 |
-| `SKILLSPECTOR_API_PASSWORD` | 可选 | 空 | Basic auth 密码。 |
+| `SKILLSPECTOR_API_USERNAME` | 浏览器访问建议 | 空 | Basic auth 用户名。需要与 `SKILLSPECTOR_API_PASSWORD` 同时设置；绑定到非 localhost 时可作为 Web/API 鉴权凭据。 |
+| `SKILLSPECTOR_API_PASSWORD` | 浏览器访问建议 | 空 | Basic auth 密码。 |
+| `SKILLSPECTOR_AUTH_TOKEN` | API/MCP 客户端建议 | 空 | Web/API Bearer token。绑定到非 localhost 时，如果未设置 Basic auth，则必须配置。 |
 | `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` | 可选 | `50` | Web/API 上传大小限制，单位 MiB。 |
 | `SKILLSPECTOR_PUBLIC_URL` | 反代/公网部署推荐 | 空 | 创建 upload ticket 时使用的公开 base URL。非 localhost 建议使用 `https://...`。 |
 | `SKILLSPECTOR_LAN_BIND_IP` | LAN override 必需 | 空 | `docker-compose.lan.yml` 使用的宿主机绑定 IP，必须显式设置。 |
@@ -196,7 +196,7 @@ curl -sS \
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.3
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.4
     container_name: skillspector-adapter
     restart: unless-stopped
     env_file: [.env]
@@ -258,7 +258,7 @@ curl http://127.0.0.1:18477/health
 
 确认：
 
-- `release_version` 等于 `20260709.3`
+- `release_version` 等于 `20260709.4`
 - `git_commit` 等于本次构建 commit；未提交构建会带 `-dirty`
 - `schema_version` 等于构建时传入的 `SCHEMA_VERSION`
 
