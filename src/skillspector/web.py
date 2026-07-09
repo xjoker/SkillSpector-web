@@ -807,7 +807,9 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         if result["ok"]:
             self._json(HTTPStatus.OK, result)
             return
-        status = HTTPStatus.NOT_FOUND if result["error"] == "Upload not found" else HTTPStatus.CONFLICT
+        status = (
+            HTTPStatus.NOT_FOUND if result["error"] == "Upload not found" else HTTPStatus.CONFLICT
+        )
         self._json(status, result)
 
     def _handle_scan(self) -> None:

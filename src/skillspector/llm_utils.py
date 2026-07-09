@@ -39,6 +39,7 @@ import json
 from typing import NoReturn
 
 from langchain_core.language_models.chat_models import BaseChatModel
+
 from skillspector.model_info import get_max_input_tokens, get_max_output_tokens
 from skillspector.providers import (
     create_chat_model,
