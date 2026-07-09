@@ -5,7 +5,7 @@
 当前测试镜像：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.1
+ghcr.io/xjoker/skillspector-adapter:20260709.2
 ```
 
 ## 构建镜像
@@ -31,7 +31,7 @@ make docker-smoke
 构建会同时打以下本地 tag：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.1
+ghcr.io/xjoker/skillspector-adapter:20260709.2
 ghcr.io/xjoker/skillspector-adapter:dev
 ghcr.io/xjoker/skillspector-adapter:latest
 skillspector
@@ -54,7 +54,7 @@ skillspector
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.1
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.2
     container_name: skillspector-adapter
     restart: unless-stopped
     cap_drop:
@@ -195,7 +195,7 @@ curl -sS \
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.1
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.2
     container_name: skillspector-adapter
     restart: unless-stopped
     env_file: [.env]
@@ -257,7 +257,7 @@ curl http://127.0.0.1:18477/health
 
 确认：
 
-- `release_version` 等于 `20260709.1`
+- `release_version` 等于 `20260709.2`
 - `git_commit` 等于本次构建 commit；未提交构建会带 `-dirty`
 - `schema_version` 等于构建时传入的 `SCHEMA_VERSION`
 
