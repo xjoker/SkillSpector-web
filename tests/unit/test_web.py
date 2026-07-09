@@ -48,6 +48,10 @@ def test_web_homepage_accepts_query_string() -> None:
 
     assert response.status == 200
     assert "SkillSpector Web" in body
+    assert "Provider" not in body
+    assert "模型" not in body
+    assert "Structured output" not in body
+    assert "API Key" not in body
 
 
 def test_health_includes_release_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,7 +78,14 @@ def test_health_includes_release_metadata(monkeypatch: pytest.MonkeyPatch) -> No
     assert payload["schema_version"] == "container-v1"
 
 
-def test_web_scan_uploads_file_to_graph(tmp_path: Path) -> None:
+def test_web_scan_uploads_file_to_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_PROVIDER", "openai")
+    monkeypatch.setenv("SKILLSPECTOR_MODEL", "custom-model")
+    monkeypatch.setenv("SKILLSPECTOR_META_MODEL", "meta-model")
+    monkeypatch.setenv("SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD", "text_json")
+    monkeypatch.setenv("SKILLSPECTOR_LLM_MAX_CONCURRENCY", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://url-user:url-pass@localhost:11434/v1")
     calls: list[tuple[Path, bool]] = []
 
     def fake_scan(path: Path, use_llm: bool) -> dict[str, Any]:
@@ -112,13 +123,11 @@ def test_web_scan_uploads_file_to_graph(tmp_path: Path) -> None:
                 "Content-Length": "7",
                 "Content-Type": "application/octet-stream",
                 "X-Filename": "../SKILL.md",
-                "X-Skillspector-Provider": "openai",
-                "X-Skillspector-Model": "custom-model",
-                "X-Skillspector-Meta-Model": "meta-model",
-                "X-Skillspector-Structured-Output": "text_json",
-                "X-Skillspector-LLM-Max-Concurrency": "1",
-                "X-Skillspector-Api-Key": "secret-key",
-                "X-Skillspector-Base-Url": "http://url-user:url-pass@localhost:11434/v1",
+                "X-Skillspector-Provider": "nv_build",
+                "X-Skillspector-Model": "ignored-model",
+                "X-Skillspector-Meta-Model": "ignored-meta-model",
+                "X-Skillspector-Structured-Output": "json_schema",
+                "X-Skillspector-Api-Key": "ignored-key",
             },
         )
         response = conn.getresponse()
@@ -213,25 +222,47 @@ def test_api_requires_configured_bearer_auth(monkeypatch: Any) -> None:
     assert allowed_payload["ok"] is True
 
 
-def test_bearer_auth_still_allows_browser_shell(monkeypatch: Any) -> None:
+def test_configured_auth_protects_browser_shell_before_api(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_API_USERNAME", "api-user")
+    monkeypatch.setenv("SKILLSPECTOR_API_PASSWORD", "api-pass")
+    encoded = base64.b64encode(b"api-user:api-pass").decode("ascii")
+    server, port = _serve(SkillSpectorWebHandler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request("GET", "/")
+        denied_response = conn.getresponse()
+        denied_response.read()
+        denied_challenges = denied_response.getheaders()
+
+        conn.request("GET", "/", headers={"Authorization": f"Basic {encoded}"})
+        allowed_response = conn.getresponse()
+        allowed_body = allowed_response.read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert denied_response.status == 401
+    assert ("WWW-Authenticate", 'Basic realm="SkillSpector", charset="UTF-8"') in denied_challenges
+    assert allowed_response.status == 200
+    assert "SkillSpector Web" in allowed_body
+
+
+def test_bearer_auth_challenge_does_not_trigger_basic_prompt(monkeypatch: Any) -> None:
     monkeypatch.setenv("SKILLSPECTOR_AUTH_TOKEN", "test-token")
     server, port = _serve(SkillSpectorWebHandler)
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port)
         conn.request("GET", "/")
-        shell_response = conn.getresponse()
-        shell_body = shell_response.read().decode()
-        conn.request("GET", "/api/history")
-        api_response = conn.getresponse()
-        api_payload = json.loads(api_response.read())
+        response = conn.getresponse()
+        response.read()
+        challenges = [value for name, value in response.getheaders() if name == "WWW-Authenticate"]
     finally:
         server.shutdown()
         server.server_close()
 
-    assert shell_response.status == 200
-    assert "SkillSpector Web" in shell_body
-    assert api_response.status == 401
-    assert api_payload["ok"] is False
+    assert response.status == 401
+    assert 'Bearer realm="SkillSpector"' in challenges
+    assert 'Basic realm="SkillSpector", charset="UTF-8"' not in challenges
 
 
 def test_api_accepts_basic_auth(monkeypatch: Any) -> None:

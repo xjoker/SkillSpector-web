@@ -25,7 +25,8 @@ make docker-build
 ```bash
 docker run --rm \
   -p 8765:8765 \
-  -e SKILLSPECTOR_AUTH_TOKEN='replace-with-a-long-random-token' \
+  -e SKILLSPECTOR_API_USERNAME='skillspector' \
+  -e SKILLSPECTOR_API_PASSWORD='replace-with-a-long-random-password' \
   skillspector web --port 8765
 ```
 
@@ -158,7 +159,7 @@ curl -sS \
 | 变量 | 必需 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `SKILLSPECTOR_AUTH_TOKEN` | 远程 Web/API 必需 | 空 | Web/API Bearer token；也可作为 MCP token 回退值。 |
-| `SKILLSPECTOR_API_USERNAME` / `SKILLSPECTOR_API_PASSWORD` | 可选 | 空 | Web/API Basic auth。 |
+| `SKILLSPECTOR_API_USERNAME` / `SKILLSPECTOR_API_PASSWORD` | 浏览器访问建议 | 空 | Web/API Basic auth；用于浏览器登录弹窗。 |
 | `SKILLSPECTOR_MCP_AUTH_TOKEN` | 远程 MCP 建议 | 回退到 `SKILLSPECTOR_AUTH_TOKEN` | MCP 控制面 Bearer token。 |
 | `SKILLSPECTOR_MCP_UPLOAD_HOST` | 远程 MCP 数据面必配 | `127.0.0.1` | 上传数据面监听地址。 |
 | `SKILLSPECTOR_MCP_UPLOAD_PORT` | 远程 MCP 数据面必配 | `0` | 上传数据面监听端口；`0` 表示随机端口。 |
@@ -177,6 +178,9 @@ LLM provider 变量沿用上游：
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_PROXY_ENDPOINT_URL`
 - `ANTHROPIC_PROXY_API_KEY`
+
+Web 页面只提供上传和结果展示，不提供 provider、model 或 API key 表单。模型和
+凭据统一由服务端环境变量控制；API 客户端仍可用 Bearer token 调用 JSON 接口。
 
 ## 容器验证
 

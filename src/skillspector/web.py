@@ -117,13 +117,13 @@ INDEX_HTML = """<!doctype html>
   <style>
     :root{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--ink:#15191f;--muted:#586271;--line:#d9dee6;--accent:#0f6f68;--warn:#a94700;--bad:#b42318;--good:#087443;--soft:#eef6f5}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}header{border-bottom:1px solid var(--line);background:#fff}.bar{max-width:1180px;margin:auto;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-    h1{font-size:18px;margin:0;font-weight:750}.status{color:var(--muted);font-size:13px}.main{max-width:1180px;width:100%;margin:0 auto;padding:24px;display:grid;grid-template-columns:minmax(310px,390px) 1fr;gap:20px}
+    .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}header{border-bottom:1px solid var(--line);background:#fff}.bar{max-width:980px;margin:auto;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+    h1{font-size:18px;margin:0;font-weight:750}.status{color:var(--muted);font-size:13px}.main{max-width:980px;width:100%;margin:0 auto;padding:24px;display:grid;grid-template-columns:minmax(300px,360px) 1fr;gap:20px}
     section,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}.panel{padding:20px;display:flex;flex-direction:column;gap:16px}.title{font-size:15px;font-weight:700;margin:0 0 4px}.muted{color:var(--muted);margin:0}.file{border:1px dashed var(--line);border-radius:8px;padding:12px;background:#fafbfc}
     label{display:grid;gap:5px;color:#303846;font-weight:650}input,select{width:100%;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);padding:9px 10px;font:inherit}input[type=file]{padding:0;border:0}.check{display:flex;align-items:center;gap:8px;color:var(--muted);font-weight:500}.check input{width:auto}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
     button{border:0;border-radius:7px;background:var(--accent);color:#fff;font-weight:700;padding:10px 14px;cursor:pointer}button.ghost{background:#eef2f7;color:#26313d}button:disabled{opacity:.55;cursor:not-allowed}.result{min-height:360px;padding:20px}.score{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0 18px}
     .metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric span{display:block;color:var(--muted);font-size:12px}.metric strong{font-size:19px}.pill{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;background:#eef2f7;color:#2f3a4a}.LOW{color:var(--good)}.MEDIUM{color:var(--warn)}.HIGH,.CRITICAL{color:var(--bad)}
-    table{width:100%;border-collapse:collapse}th,td{text-align:left;border-top:1px solid var(--line);padding:9px;vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:700}.history{grid-column:1/-1;padding:18px 20px}.history button{padding:6px 9px}.details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.kv{border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--muted)}.kv b{display:block;color:var(--ink)}.error{border-color:#f1b4ad;background:#fff6f5;color:#7a271a}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;border-top:1px solid var(--line);padding:9px;vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:700}.details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.kv{border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--muted)}.kv b{display:block;color:var(--ink)}.error{border-color:#f1b4ad;background:#fff6f5;color:#7a271a}
     @media(max-width:860px){.main{grid-template-columns:1fr;padding:16px}.bar{padding:14px 16px;align-items:flex-start}.score,.details{grid-template-columns:1fr}}
   </style>
 </head>
@@ -134,34 +134,20 @@ INDEX_HTML = """<!doctype html>
     <form class="panel" id="form">
       <div><p class="title">上传检查对象</p><p class="muted">支持 zip、SKILL.md、脚本文件或单文件导出。</p></div>
       <div class="file"><input id="file" name="file" type="file" required></div>
-      <label>Provider<select id="provider"><option value="nv_build">NVIDIA Build</option><option value="openai">OpenAI / OpenAI-compatible</option><option value="anthropic">Anthropic</option></select></label>
-      <label>模型<input id="model" autocomplete="off" placeholder="留空使用 provider 默认模型"></label>
-      <label>Meta 模型<input id="metaModel" autocomplete="off" placeholder="可选，仅覆盖 meta_analyzer"></label>
-      <label>Structured output<select id="structuredOutput"><option value="json_schema">json_schema</option><option value="text_json">text_json / local compatible</option><option value="json_mode">json_mode</option><option value="function_calling">function_calling</option></select></label>
-      <label>LLM 并发<input id="llmConcurrency" type="number" min="1" max="16" value="1"></label>
-      <label>访问令牌<input id="authToken" type="password" autocomplete="off" placeholder="Bearer token"></label>
-      <label>API Key<input id="apiKey" type="password" autocomplete="off" placeholder="仅本次请求使用，不写入历史"></label>
-      <label>OpenAI Base URL<input id="baseUrl" autocomplete="off" placeholder="仅 openai 兼容端点需要"></label>
-      <div class="row"><label class="check"><input id="staticOnly" type="checkbox" checked> 静态扫描</label><button id="scan" type="submit">开始检查</button></div>
+      <button id="scan" type="submit">开始检查</button>
     </form>
     <section class="result" id="result"><p class="title">结果详情</p><p class="muted">等待上传。</p></section>
-    <section class="history"><div class="row"><div><p class="title">扫描历史</p><p class="muted">保留最近 50 次；不保存 API key。</p></div><button class="ghost" id="refresh" type="button">刷新</button></div><div id="history"></div></section>
   </main>
 </div>
 <script>
-const $=id=>document.getElementById(id),form=$("form"),file=$("file"),scan=$("scan"),state=$("state"),result=$("result"),historyBox=$("history"),staticOnly=$("staticOnly");
+const $=id=>document.getElementById(id),form=$("form"),file=$("file"),scan=$("scan"),state=$("state"),result=$("result");
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-function authHeaders(){const token=$("authToken").value.trim();if(token){sessionStorage.setItem("skillspectorAuthToken",token);return {"Authorization":`Bearer ${token}`}}sessionStorage.removeItem("skillspectorAuthToken");return {}}
-function headersFor(picked){const h={...authHeaders(),"X-Filename":encodeURIComponent(picked.name),"Content-Type":"application/octet-stream","X-Skillspector-Provider":$("provider").value,"X-Skillspector-Structured-Output":$("structuredOutput").value,"X-Skillspector-LLM-Max-Concurrency":$("llmConcurrency").value||"1"};for(const [id,key] of [["model","X-Skillspector-Model"],["metaModel","X-Skillspector-Meta-Model"],["apiKey","X-Skillspector-Api-Key"],["baseUrl","X-Skillspector-Base-Url"]]){const v=$(id).value.trim();if(v)h[key]=v}return h}
-async function apiFetch(url,options={}){const headers={...(options.headers||{}),...authHeaders()};return fetch(url,{...options,headers})}
+function headersFor(picked){return {"X-Filename":encodeURIComponent(picked.name),"Content-Type":"application/octet-stream"}}
+async function apiFetch(url,options={}){return fetch(url,{credentials:"same-origin",...options})}
 function findingRow(f){const loc=f.location||{};const rule=f.rule_id||f.id||"-",file=f.file||loc.file||"-",line=f.start_line||loc.start_line||"-",msg=f.message||f.explanation||f.finding||"-";return `<tr><td><span class="pill ${esc(f.severity)}">${esc(f.severity)}</span></td><td>${esc(rule)}</td><td>${esc(file)}:${esc(line)}</td><td>${esc(msg)}</td></tr>`}
 function renderReport(filename,report,id){const r=report||{},risk=r.risk_assessment||{},items=r.issues||r.findings||[],meta=r.metadata||{},components=r.components||[];result.className="result";result.innerHTML=`<p class="title">${esc(filename||"扫描详情")}</p><div class="score"><div class="metric"><span>风险评分</span><strong class="${esc(risk.severity)}">${esc(risk.score??0)}/100</strong></div><div class="metric"><span>严重度</span><strong class="${esc(risk.severity)}">${esc(risk.severity??"LOW")}</strong></div><div class="metric"><span>建议</span><strong>${esc(risk.recommendation??"SAFE")}</strong></div><div class="metric"><span>问题</span><strong>${items.length}</strong></div></div><div class="details"><div class="kv"><b>${esc(r.skill?.name||"unknown")}</b>Skill</div><div class="kv"><b>${esc(meta.llm_requested?"LLM":"Static")}</b>模式</div><div class="kv"><b>${components.length}</b>组件</div><div class="kv"><b>${esc(id||"-")}</b>Run ID</div></div>${items.length?`<table><thead><tr><th>等级</th><th>规则</th><th>位置</th><th>说明</th></tr></thead><tbody>${items.map(findingRow).join("")}</tbody></table>`:"<p class=muted>未发现安全问题。</p>"}`;}
 function renderError(message){result.className="result error";result.innerHTML=`<p class="title">检查失败</p><p>${esc(message)}</p>`}
-async function loadHistory(){const res=await apiFetch("/api/history");const data=await res.json();const rows=data.history||[];historyBox.innerHTML=rows.length?`<table><thead><tr><th>时间</th><th>文件</th><th>风险</th><th>问题</th><th>模型</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.scanned_at)}</td><td>${esc(x.filename)}</td><td><span class="pill ${esc(x.severity)}">${esc(x.score)}/100 ${esc(x.severity)}</span></td><td>${esc(x.issue_count)}</td><td>${esc(x.config?.model||"default")}</td><td><button class="ghost" data-id="${esc(x.id)}">详情</button></td></tr>`).join("")}</tbody></table>`:"<p class=muted>暂无历史。</p>"}
-form.addEventListener("submit",async e=>{e.preventDefault();const picked=file.files[0];if(!picked)return;scan.disabled=true;state.textContent="检查中";result.className="result";result.innerHTML="<p class=title>检查中</p><p class=muted>正在分析上传内容。</p>";try{const qs=new URLSearchParams({use_llm:String(!staticOnly.checked)});const res=await apiFetch(`/api/scan?${qs}`,{method:"POST",headers:headersFor(picked),body:picked});const data=await res.json();if(!data.ok)renderError(data.error);else{renderReport(data.filename,data.report,data.id);await loadHistory()}}catch(err){renderError(err.message)}finally{scan.disabled=false;state.textContent="就绪"}});
-$("authToken").value=sessionStorage.getItem("skillspectorAuthToken")||"";
-historyBox.addEventListener("click",async e=>{const id=e.target?.dataset?.id;if(!id)return;const res=await apiFetch(`/api/history/${encodeURIComponent(id)}`);const data=await res.json();if(data.ok)renderReport(data.item.filename,data.item.report,data.item.id);else renderError(data.error)});
-$("refresh").addEventListener("click",loadHistory);loadHistory();
+form.addEventListener("submit",async e=>{e.preventDefault();const picked=file.files[0];if(!picked)return;scan.disabled=true;state.textContent="检查中";result.className="result";result.innerHTML="<p class=title>检查中</p><p class=muted>正在分析上传内容。</p>";try{const qs=new URLSearchParams({use_llm:"true"});const res=await apiFetch(`/api/scan?${qs}`,{method:"POST",headers:headersFor(picked),body:picked});const data=await res.json();if(!data.ok)renderError(data.error);else renderReport(data.filename,data.report,data.id)}catch(err){renderError(err.message)}finally{scan.disabled=false;state.textContent="就绪"}});
 </script>
 </body>
 </html>"""
@@ -325,30 +311,6 @@ def _upload_summary(record: _UploadRecord) -> dict[str, Any]:
         "size_bytes": record.size_bytes,
         "sha256": record.sha256,
         "max_bytes": record.max_bytes,
-    }
-
-
-def _scan_config_from_headers(headers: Any) -> dict[str, str]:
-    provider = _header_value(headers, "X-Skillspector-Provider") or "nv_build"
-    if provider not in {"nv_build", "openai", "anthropic"}:
-        raise ValueError("Unsupported provider")
-    structured_output = _header_value(headers, "X-Skillspector-Structured-Output") or "json_schema"
-    structured_output = structured_output.replace("-", "_")
-    if structured_output not in STRUCTURED_OUTPUT_METHODS:
-        raise ValueError("Unsupported structured output method")
-    llm_max_concurrency = _header_value(headers, "X-Skillspector-LLM-Max-Concurrency") or "1"
-    try:
-        llm_max_concurrency_int = max(1, min(16, int(llm_max_concurrency)))
-    except ValueError as exc:
-        raise ValueError("Invalid LLM concurrency") from exc
-    return {
-        "provider": provider,
-        "model": _header_value(headers, "X-Skillspector-Model"),
-        "meta_model": _header_value(headers, "X-Skillspector-Meta-Model"),
-        "structured_output": structured_output,
-        "llm_max_concurrency": str(llm_max_concurrency_int),
-        "api_key": _header_value(headers, "X-Skillspector-Api-Key"),
-        "base_url": _header_value(headers, "X-Skillspector-Base-Url"),
     }
 
 
@@ -667,6 +629,8 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/":
+            if not self._require_api_auth(path):
+                return
             self._html(INDEX_HTML)
             return
         if path.startswith("/api/"):
@@ -735,8 +699,12 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(HTTPStatus.UNAUTHORIZED)
         self._security_headers("application/json; charset=utf-8", len(encoded))
-        self.send_header("WWW-Authenticate", 'Bearer realm="SkillSpector"')
-        self.send_header("WWW-Authenticate", 'Basic realm="SkillSpector", charset="UTF-8"')
+        if os.environ.get(AUTH_TOKEN_ENV):
+            self.send_header("WWW-Authenticate", 'Bearer realm="SkillSpector"')
+        if os.environ.get(API_USERNAME_ENV) and os.environ.get(API_PASSWORD_ENV):
+            self.send_header(
+                "WWW-Authenticate", 'Basic realm="SkillSpector", charset="UTF-8"'
+            )
         self.end_headers()
         self.wfile.write(encoded)
 
@@ -833,12 +801,7 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
 
         parsed = urlparse(self.path)
         use_llm = parse_qs(parsed.query).get("use_llm", ["false"])[0].lower() == "true"
-        try:
-            config = _scan_config_from_headers(self.headers)
-        except ValueError as exc:
-            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
-            return
-        safe_config = _redacted_config(config, use_llm)
+        config, safe_config = _current_env_scan_config(use_llm)
         filename = _safe_upload_name(self.headers.get("X-Filename"))
         upload_root = Path(tempfile.mkdtemp(prefix="skillspector_web_"))
         upload_path = upload_root / filename

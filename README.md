@@ -134,7 +134,8 @@ skillspector-docker scan ./my-skill/ --no-llm
 ```bash
 docker run --rm \
   -p 8765:8765 \
-  -e SKILLSPECTOR_AUTH_TOKEN='change-me' \
+  -e SKILLSPECTOR_API_USERNAME='skillspector' \
+  -e SKILLSPECTOR_API_PASSWORD='change-me' \
   skillspector web --port 8765
 
 curl http://127.0.0.1:8765/health
@@ -181,13 +182,12 @@ Run the local upload interface:
 skillspector-web --host 127.0.0.1 --port 8765 --max-upload-mb 50
 ```
 
-Open `http://127.0.0.1:8765`, upload a zip or file, and run a static scan by default.
-The page can override provider, model, meta-analyzer model, API key, and OpenAI-compatible
-base URL for that scan. API keys are used only for the request and are not stored in scan
-history. For local OpenAI-compatible models that do not return native structured output,
-choose `text_json` in the Structured output field and keep LLM concurrency at `1` for
-single-threaded local inference. `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` sets the default
-upload limit.
+Open `http://127.0.0.1:8765`, upload a zip or file, and view the scan result.
+The Web page does not expose provider or model controls; configure those on the
+server with `SKILLSPECTOR_PROVIDER`, `SKILLSPECTOR_MODEL`, provider API keys, and
+related environment variables. `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` sets the default
+upload limit. For browser access, Basic auth is the simplest option; Bearer auth
+is intended for API clients.
 
 ### Remote upload MCP adapter
 

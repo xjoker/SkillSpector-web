@@ -180,7 +180,7 @@ date "+%Y%m%d"
 写入 `VERSION`：
 
 ```bash
-printf '%s\n' 20260709.2 > VERSION
+printf '%s\n' 20260709.3 > VERSION
 ```
 
 同步引用该版本的文件：
@@ -344,9 +344,9 @@ curl -sS \
 
 | 字段 | 示例 |
 | --- | --- |
-| 版本 | `20260709.2` |
+| 版本 | `20260709.3` |
 | commit | `47afd41` |
-| image | `ghcr.io/xjoker/skillspector-adapter:20260709.2` |
+| image | `ghcr.io/xjoker/skillspector-adapter:20260709.3` |
 | image id/digest | `sha256:...` |
 | 测试 | `pytest -q`、`ruff`、`mypy`、`make docker-smoke` |
 | 审查 | code-reviewer / security-reviewer 结论 |

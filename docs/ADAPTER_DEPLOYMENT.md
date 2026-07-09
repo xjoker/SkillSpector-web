@@ -5,7 +5,7 @@
 当前测试镜像：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.2
+ghcr.io/xjoker/skillspector-adapter:20260709.3
 ```
 
 ## 构建镜像
@@ -31,7 +31,7 @@ make docker-smoke
 构建会同时打以下本地 tag：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.2
+ghcr.io/xjoker/skillspector-adapter:20260709.3
 ghcr.io/xjoker/skillspector-adapter:dev
 ghcr.io/xjoker/skillspector-adapter:latest
 skillspector
@@ -54,7 +54,7 @@ skillspector
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.2
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.3
     container_name: skillspector-adapter
     restart: unless-stopped
     cap_drop:
@@ -72,7 +72,7 @@ services:
 
 ```bash
 cp .env.adapter.example .env
-# edit .env and set SKILLSPECTOR_AUTH_TOKEN
+# edit .env and set SKILLSPECTOR_API_USERNAME/SKILLSPECTOR_API_PASSWORD for browser access
 docker compose up -d
 ```
 
@@ -111,8 +111,9 @@ curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
 curl -i http://127.0.0.1:18477/api/history
 ```
 
-浏览器 UI 在 Bearer-only 配置下会显示访问令牌输入框，并把该 token 附加到同源
-API 请求；如果配置 Basic auth，浏览器也可以使用标准 Basic 认证弹窗。
+浏览器 UI 与 JSON API 使用同一套鉴权。配置 Basic auth 时，浏览器会在进入
+首页前弹出标准登录框；Bearer token 主要用于 API/MCP 客户端，不再在 Web
+页面内输入。
 
 非 localhost 暴露时不要直接在不可信网络上使用明文 HTTP。推荐只让 compose
 绑定 `127.0.0.1`，再由带 TLS 的反向代理对外提供 `https://...`。需要让 ticket
@@ -195,7 +196,7 @@ curl -sS \
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.2
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.3
     container_name: skillspector-adapter
     restart: unless-stopped
     env_file: [.env]
@@ -257,7 +258,7 @@ curl http://127.0.0.1:18477/health
 
 确认：
 
-- `release_version` 等于 `20260709.2`
+- `release_version` 等于 `20260709.3`
 - `git_commit` 等于本次构建 commit；未提交构建会带 `-dirty`
 - `schema_version` 等于构建时传入的 `SCHEMA_VERSION`
 

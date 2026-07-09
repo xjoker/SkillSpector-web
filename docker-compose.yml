@@ -1,6 +1,6 @@
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.2
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.3
     container_name: skillspector-adapter
     restart: unless-stopped
     cap_drop:
