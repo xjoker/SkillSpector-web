@@ -75,6 +75,38 @@ Authorization: Bearer $SKILLSPECTOR_MCP_AUTH_TOKEN
 
 上传数据面使用 Web/API 鉴权。只配置 `SKILLSPECTOR_MCP_AUTH_TOKEN` 不足以暴露 `SKILLSPECTOR_MCP_UPLOAD_HOST=0.0.0.0`；必须同时配置 `SKILLSPECTOR_AUTH_TOKEN` 或 Basic auth。
 
+### AI 客户端接入 MCP
+
+AI 客户端连接的是 MCP 控制面，不是上传数据面。Streamable HTTP MCP URL 为：
+
+```text
+http://<host>:8001/mcp
+```
+
+请求头：
+
+```http
+Authorization: Bearer <SKILLSPECTOR_MCP_AUTH_TOKEN 或 SKILLSPECTOR_AUTH_TOKEN>
+```
+
+通用 MCP 客户端配置示例：
+
+```json
+{
+  "mcpServers": {
+    "skillspector-upload": {
+      "type": "http",
+      "url": "http://127.0.0.1:8001/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SKILLSPECTOR_MCP_AUTH_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+如果客户端字段名不同，保持这三项不变即可：transport 使用 Streamable HTTP，URL 指向 `/mcp`，并带上 Bearer 鉴权头。AI 侧可用工具为 `skills_smoke`、`skills_create_upload_ticket`、`skills_scan_upload`、`skills_get_report`；文件字节通过 ticket 返回的上传 URL 发送，不放进 MCP 参数。
+
 ## HTTP API 流程
 
 创建上传 ticket：

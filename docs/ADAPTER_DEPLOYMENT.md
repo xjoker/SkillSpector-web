@@ -215,6 +215,31 @@ Authorization: Bearer $SKILLSPECTOR_MCP_AUTH_TOKEN
 上传数据面绑定非 localhost 时仍必须配置 Web/API auth，并应放在 TLS 反向代理后面。
 只配置 `SKILLSPECTOR_MCP_AUTH_TOKEN` 不允许暴露上传数据端口。
 
+AI 客户端接入 MCP 控制面时使用 Streamable HTTP：
+
+```text
+http://10.0.4.43:18001/mcp
+Authorization: Bearer <SKILLSPECTOR_MCP_AUTH_TOKEN 或 SKILLSPECTOR_AUTH_TOKEN>
+```
+
+通用 MCP 客户端配置示例：
+
+```json
+{
+  "mcpServers": {
+    "skillspector-upload": {
+      "type": "http",
+      "url": "http://10.0.4.43:18001/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SKILLSPECTOR_MCP_AUTH_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+不同 AI 客户端的配置字段名可能不同，但必须保持：Streamable HTTP transport、URL 指向 `/mcp`、请求带 Bearer token。上传数据面端口 `18477` 只用于 ticket 上传文件字节，不是 MCP 控制面 URL。
+
 ## 上线测试检查
 
 1. `docker compose pull` 或部署新镜像。
