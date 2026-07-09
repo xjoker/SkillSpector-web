@@ -38,4 +38,4 @@ WORKDIR /scan
 EXPOSE 8477 8765 8001
 
 ENTRYPOINT ["skillspector-entrypoint"]
-CMD ["--help"]
+CMD ["web", "--port", "8477"]
