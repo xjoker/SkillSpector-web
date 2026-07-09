@@ -5,7 +5,7 @@
 当前测试镜像：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.4
+ghcr.io/xjoker/skillspector-adapter:20260709.6
 ```
 
 ## 构建镜像
@@ -31,7 +31,7 @@ make docker-smoke
 构建会同时打以下本地 tag：
 
 ```text
-ghcr.io/xjoker/skillspector-adapter:20260709.4
+ghcr.io/xjoker/skillspector-adapter:20260709.6
 ghcr.io/xjoker/skillspector-adapter:dev
 ghcr.io/xjoker/skillspector-adapter:latest
 skillspector
@@ -54,7 +54,7 @@ skillspector
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.4
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.6
     container_name: skillspector-adapter
     restart: unless-stopped
     cap_drop:
@@ -151,9 +151,12 @@ curl -X PUT \
 curl -sS \
   -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"use_llm":false}' \
+  -d '{"use_llm":true}' \
   http://127.0.0.1:18477/api/scans/<upload_id>
 ```
+
+`use_llm` 默认是 `true`。只有做静态检查排障或暂无 LLM key 时，才显式传
+`{"use_llm":false}`。
 
 获取报告：
 
@@ -171,7 +174,9 @@ curl -sS \
 | `SKILLSPECTOR_API_PASSWORD` | 浏览器访问建议 | 空 | Basic auth 密码。 |
 | `SKILLSPECTOR_AUTH_TOKEN` | API/MCP 客户端建议 | 空 | Web/API Bearer token。绑定到非 localhost 时，如果未设置 Basic auth，则必须配置。 |
 | `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` | 可选 | `50` | Web/API 上传大小限制，单位 MiB。 |
-| `SKILLSPECTOR_PUBLIC_URL` | 反代/公网部署推荐 | 空 | 创建 upload ticket 时使用的公开 base URL。非 localhost 建议使用 `https://...`。 |
+| `SKILLSPECTOR_WEB_LOG_LEVEL` | 排障推荐 | `INFO` | Web/API 容器日志级别。`INFO` 输出上传、扫描开始/结束、耗时和脱敏配置；`DEBUG` 额外输出 HTTP 请求行，仅建议短时本地排障使用。 |
+| `SKILLSPECTOR_LLM_MAX_CONCURRENCY` | 可选 | 上游默认 `10` | LLM 调用并发上限。Web/API 默认不串行化 LLM；遇到 provider 限流或 429 时可临时设为 `1` 或 `2`。 |
+| `SKILLSPECTOR_PUBLIC_URL` | 反代/公网部署推荐 | 空 | 创建 upload ticket 时使用的公开 base URL，也作为浏览器写操作同源校验的允许 Host。非 localhost 建议使用 `https://...`。 |
 | `SKILLSPECTOR_LAN_BIND_IP` | LAN override 必需 | 空 | `docker-compose.lan.yml` 使用的宿主机绑定 IP，必须显式设置。 |
 | `SKILLSPECTOR_PROVIDER` | 可选 | `nv_build` | LLM provider。静态扫描不需要 provider key。 |
 | `NVIDIA_INFERENCE_KEY` | LLM 时按 provider 必需 | 空 | `SKILLSPECTOR_PROVIDER=nv_build` 时使用。 |
@@ -196,7 +201,7 @@ curl -sS \
 ```yaml
 services:
   skillspector-adapter:
-    image: ghcr.io/xjoker/skillspector-adapter:20260709.4
+    image: ghcr.io/xjoker/skillspector-adapter:20260709.6
     container_name: skillspector-adapter
     restart: unless-stopped
     env_file: [.env]
@@ -258,7 +263,7 @@ curl http://127.0.0.1:18477/health
 
 确认：
 
-- `release_version` 等于 `20260709.4`
+- `release_version` 等于 `20260709.6`
 - `git_commit` 等于本次构建 commit；未提交构建会带 `-dirty`
 - `schema_version` 等于构建时传入的 `SCHEMA_VERSION`
 

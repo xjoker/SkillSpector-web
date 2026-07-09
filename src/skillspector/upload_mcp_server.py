@@ -10,9 +10,11 @@ separate HTTP endpoint, then scan by opaque ``upload_id``.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import threading
+import uuid
 from enum import StrEnum
 from http.server import ThreadingHTTPServer
 from typing import TYPE_CHECKING, Annotated, Any
@@ -20,13 +22,16 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from pydantic import AnyHttpUrl
 
+from skillspector.logging_config import get_logger
 from skillspector.web import (
     AUTH_TOKEN_ENV,
     DEFAULT_HOST,
     DEFAULT_UPLOAD_TICKET_TTL_SECONDS,
     SkillSpectorWebHandler,
     _auth_configured,
+    _exception_log_fields,
     _is_loopback_host,
+    _scan_failed_payload,
     create_upload_ticket,
     get_report_item,
     scan_uploaded_artifact,
@@ -34,6 +39,8 @@ from skillspector.web import (
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
+
+logger = get_logger(__name__)
 
 DEFAULT_MCP_PORT = 8001
 MCP_AUTH_TOKEN_ENV = "SKILLSPECTOR_MCP_AUTH_TOKEN"
@@ -184,9 +191,20 @@ def build_server(
         )
 
     @server.tool()
-    def skills_scan_upload(upload_id: str, use_llm: bool = False) -> dict[str, Any]:
+    def skills_scan_upload(upload_id: str, use_llm: bool = True) -> dict[str, Any]:
         """Scan a previously uploaded artifact by upload id and return a compact verdict."""
-        return scan_uploaded_artifact(upload_id, use_llm=use_llm)
+        request_id = uuid.uuid4().hex[:12]
+        try:
+            return scan_uploaded_artifact(upload_id, use_llm=use_llm)
+        except Exception as exc:
+            logger.error(
+                "upload_mcp_scan_failed request_id=%s upload_id=%s use_llm=%s error=%s",
+                request_id,
+                upload_id,
+                use_llm,
+                json.dumps(_exception_log_fields(exc), sort_keys=True),
+            )
+            return _scan_failed_payload(request_id)
 
     @server.tool()
     def skills_get_report(report_id: str, include_raw: bool = False) -> dict[str, Any]:

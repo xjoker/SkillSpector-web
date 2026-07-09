@@ -4,6 +4,7 @@ import base64
 import hashlib
 import http.client
 import json
+import logging
 import os
 import threading
 from http.server import ThreadingHTTPServer
@@ -19,6 +20,11 @@ from skillspector.web import SkillSpectorWebHandler
 
 def _auth_header(token: str = "test-token") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _basic_auth_header(username: str = "api-user", password: str = "api-pass") -> dict[str, str]:
+    encoded = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {encoded}"}
 
 
 def _serve(handler: type[SkillSpectorWebHandler]) -> tuple[ThreadingHTTPServer, int]:
@@ -54,6 +60,21 @@ def test_web_homepage_accepts_query_string() -> None:
     assert "API Key" not in body
 
 
+def test_web_homepage_uses_llm_scan_by_default() -> None:
+    server, port = _serve(SkillSpectorWebHandler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        body = response.read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 200
+    assert 'use_llm:"true"' in body
+
+
 def test_health_includes_release_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SKILLSPECTOR_GIT_COMMIT", "abc1234")
     monkeypatch.setenv("SKILLSPECTOR_SCHEMA_VERSION", "container-v1")
@@ -76,6 +97,21 @@ def test_health_includes_release_metadata(monkeypatch: pytest.MonkeyPatch) -> No
     assert payload["release_version"] == "20260709.1"
     assert payload["git_commit"] == "abc1234"
     assert payload["schema_version"] == "container-v1"
+
+
+def test_web_scan_default_llm_concurrency_uses_upstream_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SKILLSPECTOR_LLM_MAX_CONCURRENCY", raising=False)
+
+    config, safe_config = web_module._current_env_scan_config(use_llm=True)
+
+    assert config["llm_max_concurrency"] == str(web_module.DEFAULT_LLM_MAX_CONCURRENCY)
+    assert safe_config["llm_max_concurrency"] == web_module.DEFAULT_LLM_MAX_CONCURRENCY
+
+
+def test_safe_upload_name_replaces_control_characters() -> None:
+    assert web_module._safe_upload_name("good%0AERROR%09x.md") == "good_ERROR_x.md"
 
 
 def test_web_scan_uploads_file_to_graph(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,6 +197,161 @@ def test_web_scan_uploads_file_to_graph(monkeypatch: pytest.MonkeyPatch) -> None
     assert detail_payload["item"]["filename"] == "SKILL.md"
     assert "url-user" not in json.dumps(detail_payload)
     assert "url-pass" not in json.dumps(detail_payload)
+
+
+def test_web_scan_defaults_to_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
+    calls: list[bool] = []
+
+    def fake_scan(path: Path, use_llm: bool) -> dict[str, Any]:
+        calls.append(use_llm)
+        return {
+            "risk_assessment": {"score": 0, "severity": "LOW", "recommendation": "SAFE"},
+            "issues": [],
+            "components": [{"path": "SKILL.md"}],
+            "metadata": {"llm_requested": use_llm},
+        }
+
+    handler = type(
+        "DefaultLlmHandler",
+        (SkillSpectorWebHandler,),
+        {"graph_scan": staticmethod(fake_scan), "max_upload_bytes": 1024},
+    )
+    server, port = _serve(handler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request(
+            "POST",
+            "/api/scan",
+            body=b"# skill",
+            headers={
+                "Content-Length": "7",
+                "Content-Type": "application/octet-stream",
+                "X-Filename": "SKILL.md",
+            },
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 200
+    assert payload["ok"] is True
+    assert calls == [True]
+
+
+def test_web_scan_logs_redacted_operational_details(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_PROVIDER", "openai")
+    monkeypatch.setenv("SKILLSPECTOR_MODEL", "custom-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://url-user:url-pass@localhost:11434/v1")
+    caplog.set_level(logging.INFO, logger="skillspector")
+
+    def fake_scan(path: Path, use_llm: bool) -> dict[str, Any]:
+        assert path.exists()
+        return {
+            "risk_assessment": {"score": 0, "severity": "LOW", "recommendation": "SAFE"},
+            "issues": [],
+            "components": [{"path": "SKILL.md"}],
+            "metadata": {
+                "llm_requested": use_llm,
+                "llm_available": True,
+                "meta_analysis_applied": True,
+            },
+        }
+
+    handler = type(
+        "LoggingHandler",
+        (SkillSpectorWebHandler,),
+        {"graph_scan": staticmethod(fake_scan), "max_upload_bytes": 1024},
+    )
+    server, port = _serve(handler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request(
+            "POST",
+            "/api/scan?use_llm=true",
+            body=b"# skill",
+            headers={
+                "Content-Length": "7",
+                "Content-Type": "application/octet-stream",
+                "X-Filename": "SKILL.md",
+            },
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 200
+    assert payload["ok"] is True
+    assert "web_scan_received" in caplog.text
+    assert "web_scan_upload_complete" in caplog.text
+    assert "web_scan_started" in caplog.text
+    assert "web_scan_completed" in caplog.text
+    assert "secret-key" not in caplog.text
+    assert "url-user" not in caplog.text
+    assert "url-pass" not in caplog.text
+    assert '"api_key_supplied": true' in caplog.text
+    assert '"llm_requested": true' in caplog.text
+
+
+def test_web_scan_failure_does_not_leak_exception_details(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
+    caplog.set_level(logging.INFO, logger="skillspector")
+
+    def broken_scan(path: Path, use_llm: bool) -> dict[str, Any]:
+        raise RuntimeError(
+            "provider failed with secret-key Authorization: Bearer secret-token "
+            "Basic dXNlcjpwYXNz http://url-user:url-pass@localhost:11434/v1 upload=# skill"
+        )
+
+    handler = type(
+        "BrokenScanHandler",
+        (SkillSpectorWebHandler,),
+        {"graph_scan": staticmethod(broken_scan), "max_upload_bytes": 1024},
+    )
+    server, port = _serve(handler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request(
+            "POST",
+            "/api/scan?use_llm=true",
+            body=b"# skill",
+            headers={
+                "Content-Length": "7",
+                "Content-Type": "application/octet-stream",
+                "X-Filename": "SKILL.md",
+            },
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 500
+    assert payload["error"].startswith("Scan failed; request_id=")
+    body = json.dumps(payload)
+    assert "secret-key" not in body
+    assert "secret-token" not in body
+    assert "url-user" not in body
+    assert "url-pass" not in body
+    assert "# skill" not in body
+    assert "RuntimeError" in caplog.text
+    assert "secret-key" not in caplog.text
+    assert "secret-token" not in caplog.text
+    assert "url-user" not in caplog.text
+    assert "url-pass" not in caplog.text
+    assert "# skill" not in caplog.text
 
 
 def test_web_scan_rejects_oversized_upload() -> None:
@@ -283,6 +474,96 @@ def test_api_accepts_basic_auth(monkeypatch: Any) -> None:
     assert payload["ok"] is True
 
 
+def test_api_post_rejects_cross_site_browser_request(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_API_USERNAME", "api-user")
+    monkeypatch.setenv("SKILLSPECTOR_API_PASSWORD", "api-pass")
+    called = False
+
+    def fake_scan(path: Path, use_llm: bool) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return {}
+
+    handler = type(
+        "CrossSiteHandler",
+        (SkillSpectorWebHandler,),
+        {"graph_scan": staticmethod(fake_scan), "max_upload_bytes": 1024},
+    )
+    server, port = _serve(handler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request(
+            "POST",
+            "/api/scan",
+            body=b"# skill",
+            headers={
+                **_basic_auth_header(),
+                "Content-Length": "7",
+                "Content-Type": "application/octet-stream",
+                "Origin": "http://evil.example",
+                "Sec-Fetch-Site": "cross-site",
+                "X-Filename": "SKILL.md",
+            },
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 403
+    assert payload["ok"] is False
+    assert "Cross-site" in payload["error"]
+    assert called is False
+
+
+def test_api_post_accepts_same_origin_browser_request(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_API_USERNAME", "api-user")
+    monkeypatch.setenv("SKILLSPECTOR_API_PASSWORD", "api-pass")
+    called = False
+
+    def fake_scan(path: Path, use_llm: bool) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return {
+            "risk_assessment": {"score": 0, "severity": "LOW", "recommendation": "SAFE"},
+            "issues": [],
+            "components": [{"path": "SKILL.md"}],
+        }
+
+    handler = type(
+        "SameOriginHandler",
+        (SkillSpectorWebHandler,),
+        {"graph_scan": staticmethod(fake_scan), "max_upload_bytes": 1024},
+    )
+    server, port = _serve(handler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request(
+            "POST",
+            "/api/scan",
+            body=b"# skill",
+            headers={
+                **_basic_auth_header(),
+                "Content-Length": "7",
+                "Content-Type": "application/octet-stream",
+                "Host": f"127.0.0.1:{port}",
+                "Origin": f"http://127.0.0.1:{port}",
+                "Sec-Fetch-Site": "same-origin",
+                "X-Filename": "SKILL.md",
+            },
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 200
+    assert payload["ok"] is True
+    assert called is True
+
+
 def test_ticket_url_ignores_untrusted_forwarded_host(monkeypatch: Any) -> None:
     monkeypatch.setenv("SKILLSPECTOR_AUTH_TOKEN", "test-token")
     server, port = _serve(SkillSpectorWebHandler)
@@ -381,7 +662,7 @@ def test_http_api_ticket_upload_scan_and_report(monkeypatch: Any) -> None:
         conn.request(
             "POST",
             f"/api/scans/{ticket['upload_id']}",
-            body=json.dumps({"use_llm": True}),
+            body=json.dumps({}),
             headers={"Content-Type": "application/json", **_auth_header()},
         )
         scan_response = conn.getresponse()
@@ -459,6 +740,51 @@ def test_http_scan_rejects_non_boolean_use_llm(monkeypatch: Any) -> None:
     assert scan_payload["ok"] is False
     assert "use_llm" in scan_payload["error"]
     assert called is False
+
+
+def test_http_scan_returns_generic_json_when_scanner_raises(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("SKILLSPECTOR_AUTH_TOKEN", "test-token")
+    caplog.set_level(logging.INFO, logger="skillspector")
+
+    def broken_scan(upload_id: str, use_llm: bool = False) -> dict[str, Any]:
+        raise RuntimeError(
+            f"scan failed for {upload_id} with secret-key Authorization: Bearer secret-token "
+            "Basic dXNlcjpwYXNz http://url-user:url-pass@localhost:11434/v1"
+        )
+
+    monkeypatch.setattr(web_module, "scan_uploaded_artifact", broken_scan)
+    server, port = _serve(SkillSpectorWebHandler)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request(
+            "POST",
+            "/api/scans/upload-1",
+            body=json.dumps({}),
+            headers={"Content-Type": "application/json", **_auth_header()},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status == 500
+    assert payload["ok"] is False
+    assert payload["error"].startswith("Scan failed; request_id=")
+    assert payload["request_id"]
+    body = json.dumps(payload)
+    assert "secret-key" not in body
+    assert "secret-token" not in body
+    assert "url-user" not in body
+    assert "url-pass" not in body
+    assert "scan failed for upload-1" not in body
+    assert "RuntimeError" in caplog.text
+    assert "secret-key" not in caplog.text
+    assert "secret-token" not in caplog.text
+    assert "url-user" not in caplog.text
+    assert "url-pass" not in caplog.text
 
 
 def test_upload_ticket_put_then_scan_by_reference() -> None:

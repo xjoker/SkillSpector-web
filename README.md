@@ -197,7 +197,12 @@ The Web page does not expose provider or model controls; configure those on the
 server with `SKILLSPECTOR_PROVIDER`, `SKILLSPECTOR_MODEL`, provider API keys, and
 related environment variables. `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` sets the default
 upload limit. For browser access, Basic auth is the simplest option; Bearer auth
-is intended for API clients.
+is intended for API clients. Web/API containers default to INFO operational logs;
+set `SKILLSPECTOR_WEB_LOG_LEVEL=DEBUG` when you need HTTP request-line logging.
+LLM semantic analyzer calls use upstream default concurrency; set
+`SKILLSPECTOR_LLM_MAX_CONCURRENCY` only when you need to rate-limit provider calls.
+Use DEBUG only for short local troubleshooting windows in centralized logging
+environments.
 
 ### Remote upload MCP adapter
 
@@ -268,7 +273,7 @@ curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
 # 3. Scan by upload_id
 curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"use_llm":false}' \
+  -d '{"use_llm":true}' \
   http://127.0.0.1:8765/api/scans/<upload_id>
 
 # 4. Fetch compact report
@@ -276,6 +281,8 @@ curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
   http://127.0.0.1:8765/api/reports/<report_id>
 ```
 
+`use_llm` defaults to `true` for Web/API and upload-MCP scans. Set it to
+`false` only for static-only troubleshooting or when no LLM key is available.
 API authentication supports either `Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN`
 or HTTP Basic with `SKILLSPECTOR_API_USERNAME` and `SKILLSPECTOR_API_PASSWORD`.
 Binding the Web/API server to a non-localhost interface without API credentials
@@ -682,7 +689,9 @@ Issues (2)
 | `AWS_REGION` | AWS region for the Bedrock Runtime endpoint. Defaults to `us-west-2`. | Optional (used when `SKILLSPECTOR_PROVIDER=bedrock`) |
 | `SKILLSPECTOR_MODEL` | Override the active provider's default model. See the LLM Analysis table for each provider's default. | Optional |
 | `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled per-provider YAML registry (`src/skillspector/providers/<provider>/model_registry.yaml`) with a custom path. | Optional |
+| `SKILLSPECTOR_LLM_MAX_CONCURRENCY` | Limit parallel LLM calls. Defaults to upstream concurrency (`10`); set a lower value only when the provider rate-limits. | Optional |
 | `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`). | Optional |
+| `SKILLSPECTOR_WEB_LOG_LEVEL` | Web/API log level. Defaults to `INFO` for container troubleshooting; `DEBUG` includes HTTP request-line logs. | Optional |
 
 > **CLI providers** (`claude_cli`, `codex_cli`): No API key is needed. Authentication is managed entirely by the agent CLI's own login session (`claude auth login` / `codex login`). SkillSpector never reads or forwards API keys when these providers are active. The subprocess is run in a hardened sandbox: tools disabled, no MCP, read-only sandbox mode (codex), and untrusted skill content is delivered only via stdin.
 

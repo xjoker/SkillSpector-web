@@ -136,9 +136,12 @@ curl -X PUT \
 curl -sS \
   -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"use_llm":false}' \
+  -d '{"use_llm":true}' \
   http://127.0.0.1:8765/api/scans/<upload_id>
 ```
+
+`use_llm` 默认是 `true`。只有做静态检查排障或暂无 LLM key 时，才显式传
+`{"use_llm":false}`。
 
 获取报告：
 
@@ -160,12 +163,15 @@ curl -sS \
 | --- | --- | --- | --- |
 | `SKILLSPECTOR_API_USERNAME` / `SKILLSPECTOR_API_PASSWORD` | 浏览器访问建议 | 空 | Web/API Basic auth；用于浏览器登录弹窗。绑定到非 localhost 时可作为 Web/API 鉴权凭据。 |
 | `SKILLSPECTOR_AUTH_TOKEN` | API/MCP 客户端建议 | 空 | Web/API Bearer token；也可作为 MCP token 回退值。绑定到非 localhost 时，如果未设置 Basic auth，则必须设置。 |
+| `SKILLSPECTOR_PUBLIC_URL` | 反代/公网部署推荐 | 空 | Web/API 公开 base URL；用于 upload ticket URL 和浏览器写操作同源校验。 |
 | `SKILLSPECTOR_MCP_AUTH_TOKEN` | 远程 MCP 建议 | 回退到 `SKILLSPECTOR_AUTH_TOKEN` | MCP 控制面 Bearer token。 |
 | `SKILLSPECTOR_MCP_UPLOAD_HOST` | 远程 MCP 数据面必配 | `127.0.0.1` | 上传数据面监听地址。 |
 | `SKILLSPECTOR_MCP_UPLOAD_PORT` | 远程 MCP 数据面必配 | `0` | 上传数据面监听端口；`0` 表示随机端口。 |
 | `SKILLSPECTOR_MCP_UPLOAD_PUBLIC_URL` | 反代/容器映射时必配 | 自动推导 | 返回给客户端的上传数据面公网 URL。 |
 | `SKILLSPECTOR_MCP_PUBLIC_URL` | 反代 MCP 时可选 | 自动推导 | MCP auth resource URL。 |
 | `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` | 可选 | `50` | Web/API 上传大小限制。 |
+| `SKILLSPECTOR_WEB_LOG_LEVEL` | 排障推荐 | `INFO` | Web/API 容器日志级别。`INFO` 输出上传和扫描阶段；`DEBUG` 额外输出 HTTP 请求行，仅建议短时本地排障使用。 |
+| `SKILLSPECTOR_LLM_MAX_CONCURRENCY` | 可选 | 上游默认 `10` | LLM 调用并发上限；遇到 provider 限流时可临时设为 `1` 或 `2`。 |
 | `SKILLSPECTOR_GIT_COMMIT` | 构建注入 | `unknown` | `/health` 发布验证字段。 |
 | `SKILLSPECTOR_SCHEMA_VERSION` | 构建注入 | `none` | `/health` 部署/schema 标记。 |
 

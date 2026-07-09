@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -29,7 +30,8 @@ from urllib.parse import parse_qs, unquote, urlparse, urlsplit, urlunsplit
 import typer
 
 from skillspector import __version__
-from skillspector.logging_config import get_logger
+from skillspector.llm_limiter import DEFAULT_LLM_MAX_CONCURRENCY
+from skillspector.logging_config import get_logger, set_level
 
 logger = get_logger(__name__)
 
@@ -45,6 +47,7 @@ PUBLIC_URL_ENV = "SKILLSPECTOR_PUBLIC_URL"
 GIT_COMMIT_ENV = "SKILLSPECTOR_GIT_COMMIT"
 SCHEMA_VERSION_ENV = "SKILLSPECTOR_SCHEMA_VERSION"
 RELEASE_VERSION_ENV = "SKILLSPECTOR_RELEASE_VERSION"
+WEB_LOG_LEVEL_ENV = "SKILLSPECTOR_WEB_LOG_LEVEL"
 CHUNK_SIZE = 1024 * 1024
 MAX_HISTORY_ITEMS = 50
 MODEL_SLOTS = (
@@ -68,6 +71,18 @@ SCAN_ENV_KEYS = (
     "NVIDIA_INFERENCE_KEY",
 )
 STRUCTURED_OUTPUT_METHODS = {"json_schema", "json_mode", "function_calling", "text_json"}
+_WEB_LOGGING_CONFIGURED = False
+
+
+def _normalize_llm_max_concurrency(raw: str | None) -> str:
+    if raw:
+        try:
+            configured = int(raw)
+        except ValueError:
+            configured = DEFAULT_LLM_MAX_CONCURRENCY
+    else:
+        configured = DEFAULT_LLM_MAX_CONCURRENCY
+    return str(max(1, min(16, configured)))
 
 
 def _health_payload() -> dict[str, str | bool]:
@@ -79,6 +94,19 @@ def _health_payload() -> dict[str, str | bool]:
         "git_commit": os.environ.get(GIT_COMMIT_ENV, "").strip() or "unknown",
         "schema_version": os.environ.get(SCHEMA_VERSION_ENV, "").strip() or "none",
     }
+
+
+def _configure_web_logging() -> None:
+    global _WEB_LOGGING_CONFIGURED
+    if _WEB_LOGGING_CONFIGURED:
+        return
+    level = (
+        os.environ.get(WEB_LOG_LEVEL_ENV)
+        or os.environ.get("SKILLSPECTOR_LOG_LEVEL")
+        or "INFO"
+    )
+    set_level(level)
+    _WEB_LOGGING_CONFIGURED = True
 
 
 @dataclass
@@ -145,9 +173,10 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 function headersFor(picked){return {"X-Filename":encodeURIComponent(picked.name),"Content-Type":"application/octet-stream"}}
 async function apiFetch(url,options={}){return fetch(url,{credentials:"same-origin",...options})}
 function findingRow(f){const loc=f.location||{};const rule=f.rule_id||f.id||"-",file=f.file||loc.file||"-",line=f.start_line||loc.start_line||"-",msg=f.message||f.explanation||f.finding||"-";return `<tr><td><span class="pill ${esc(f.severity)}">${esc(f.severity)}</span></td><td>${esc(rule)}</td><td>${esc(file)}:${esc(line)}</td><td>${esc(msg)}</td></tr>`}
-function renderReport(filename,report,id){const r=report||{},risk=r.risk_assessment||{},items=r.issues||r.findings||[],meta=r.metadata||{},components=r.components||[];result.className="result";result.innerHTML=`<p class="title">${esc(filename||"扫描详情")}</p><div class="score"><div class="metric"><span>风险评分</span><strong class="${esc(risk.severity)}">${esc(risk.score??0)}/100</strong></div><div class="metric"><span>严重度</span><strong class="${esc(risk.severity)}">${esc(risk.severity??"LOW")}</strong></div><div class="metric"><span>建议</span><strong>${esc(risk.recommendation??"SAFE")}</strong></div><div class="metric"><span>问题</span><strong>${items.length}</strong></div></div><div class="details"><div class="kv"><b>${esc(r.skill?.name||"unknown")}</b>Skill</div><div class="kv"><b>${esc(meta.llm_requested?"LLM":"Static")}</b>模式</div><div class="kv"><b>${components.length}</b>组件</div><div class="kv"><b>${esc(id||"-")}</b>Run ID</div></div>${items.length?`<table><thead><tr><th>等级</th><th>规则</th><th>位置</th><th>说明</th></tr></thead><tbody>${items.map(findingRow).join("")}</tbody></table>`:"<p class=muted>未发现安全问题。</p>"}`;}
+function elapsedText(ms){if(!Number.isFinite(ms))return "-";return ms<1000?`${Math.round(ms)} ms`:`${(ms/1000).toFixed(1)} s`}
+function renderReport(filename,report,id,history){const r=report||{},risk=r.risk_assessment||{},items=r.issues||r.findings||[],meta=r.metadata||{},components=r.components||[],elapsed=elapsedText(Number(history?.elapsed_ms));result.className="result";result.innerHTML=`<p class="title">${esc(filename||"扫描详情")}</p><div class="score"><div class="metric"><span>风险评分</span><strong class="${esc(risk.severity)}">${esc(risk.score??0)}/100</strong></div><div class="metric"><span>严重度</span><strong class="${esc(risk.severity)}">${esc(risk.severity??"LOW")}</strong></div><div class="metric"><span>建议</span><strong>${esc(risk.recommendation??"SAFE")}</strong></div><div class="metric"><span>问题</span><strong>${items.length}</strong></div></div><div class="details"><div class="kv"><b>${esc(r.skill?.name||"unknown")}</b>Skill</div><div class="kv"><b>${esc(meta.llm_requested?"LLM":"Static")}</b>模式</div><div class="kv"><b>${components.length}</b>组件</div><div class="kv"><b>${esc(elapsed)}</b>耗时</div><div class="kv"><b>${esc(id||"-")}</b>Run ID</div></div>${items.length?`<table><thead><tr><th>等级</th><th>规则</th><th>位置</th><th>说明</th></tr></thead><tbody>${items.map(findingRow).join("")}</tbody></table>`:"<p class=muted>未发现安全问题。</p>"}`;}
 function renderError(message){result.className="result error";result.innerHTML=`<p class="title">检查失败</p><p>${esc(message)}</p>`}
-form.addEventListener("submit",async e=>{e.preventDefault();const picked=file.files[0];if(!picked)return;scan.disabled=true;state.textContent="检查中";result.className="result";result.innerHTML="<p class=title>检查中</p><p class=muted>正在分析上传内容。</p>";try{const qs=new URLSearchParams({use_llm:"true"});const res=await apiFetch(`/api/scan?${qs}`,{method:"POST",headers:headersFor(picked),body:picked});const data=await res.json();if(!data.ok)renderError(data.error);else renderReport(data.filename,data.report,data.id)}catch(err){renderError(err.message)}finally{scan.disabled=false;state.textContent="就绪"}});
+form.addEventListener("submit",async e=>{e.preventDefault();const picked=file.files[0];if(!picked)return;scan.disabled=true;state.textContent="检查中";result.className="result";result.innerHTML="<p class=title>检查中</p><p class=muted>正在分析上传内容。</p>";try{const qs=new URLSearchParams({use_llm:"true"});const res=await apiFetch(`/api/scan?${qs}`,{method:"POST",headers:headersFor(picked),body:picked});const data=await res.json();if(!data.ok)renderError(data.error);else renderReport(data.filename,data.report,data.id,data.history_item)}catch(err){renderError(err.message)}finally{scan.disabled=false;state.textContent="就绪"}});
 </script>
 </body>
 </html>"""
@@ -165,7 +194,9 @@ def _max_upload_bytes(max_upload_mb: int | None = None) -> int:
 
 
 def _safe_upload_name(raw_name: str | None) -> str:
-    name = Path(unquote(raw_name or "")).name.strip()
+    name = Path(unquote(raw_name or "")).name
+    name = "".join("_" if ord(char) < 32 or 127 <= ord(char) <= 159 else char for char in name)
+    name = name.strip()
     return name or "upload.bin"
 
 
@@ -228,6 +259,38 @@ def _request_is_authorized(headers: Any) -> bool:
             )
 
     return not _auth_configured()
+
+
+def _request_origin_allowed(headers: Any) -> bool:
+    sec_fetch_site = _header_value(headers, "Sec-Fetch-Site").lower()
+    if sec_fetch_site == "cross-site":
+        return False
+
+    origin = _header_value(headers, "Origin")
+    if not origin:
+        return True
+    try:
+        parsed_origin = urlsplit(origin)
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.netloc:
+        return False
+
+    allowed_hosts = set()
+    host = _header_value(headers, "Host").lower()
+    if host:
+        allowed_hosts.add(host)
+
+    configured = os.environ.get(PUBLIC_URL_ENV, "").strip()
+    if configured:
+        try:
+            parsed_public_url = urlsplit(configured)
+        except ValueError:
+            parsed_public_url = None
+        if parsed_public_url is not None and parsed_public_url.netloc:
+            allowed_hosts.add(parsed_public_url.netloc.lower())
+
+    return parsed_origin.netloc.lower() in allowed_hosts
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -341,7 +404,9 @@ def _redacted_config(config: dict[str, str], use_llm: bool) -> dict[str, object]
         "model": config["model"] or "",
         "meta_model": config["meta_model"] or "",
         "structured_output": config["structured_output"] or "json_schema",
-        "llm_max_concurrency": int(config["llm_max_concurrency"] or "1"),
+        "llm_max_concurrency": int(
+            config["llm_max_concurrency"] or str(DEFAULT_LLM_MAX_CONCURRENCY)
+        ),
         "base_url": _redact_url_userinfo(config["base_url"]),
         "api_key_supplied": bool(config["api_key"]),
         "use_llm": use_llm,
@@ -364,16 +429,14 @@ def _current_env_scan_config(use_llm: bool) -> tuple[dict[str, str], dict[str, o
         "structured_output": os.environ.get(
             "SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD", "json_schema"
         ).replace("-", "_"),
-        "llm_max_concurrency": os.environ.get("SKILLSPECTOR_LLM_MAX_CONCURRENCY", "1"),
+        "llm_max_concurrency": _normalize_llm_max_concurrency(
+            os.environ.get("SKILLSPECTOR_LLM_MAX_CONCURRENCY")
+        ),
         "api_key": os.environ.get(api_key_name, ""),
         "base_url": os.environ.get("OPENAI_BASE_URL", ""),
     }
     if config["structured_output"] not in STRUCTURED_OUTPUT_METHODS:
         config["structured_output"] = "json_schema"
-    try:
-        config["llm_max_concurrency"] = str(max(1, min(16, int(config["llm_max_concurrency"]))))
-    except ValueError:
-        config["llm_max_concurrency"] = "1"
     return config, _redacted_config(config, use_llm)
 
 
@@ -544,6 +607,37 @@ def _record_history(
     return item
 
 
+def _scan_log_fields(report: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    metadata = report.get("metadata") or {}
+    return {
+        "verdict": summary["verdict"],
+        "score": summary["score"],
+        "severity": summary["severity"],
+        "recommendation": summary["recommendation"],
+        "issue_count": summary["issue_count"],
+        "component_count": summary["component_count"],
+        "llm_requested": metadata.get("llm_requested"),
+        "llm_available": metadata.get("llm_available"),
+        "meta_analysis_applied": metadata.get("meta_analysis_applied"),
+    }
+
+
+def _exception_log_fields(exc: Exception) -> dict[str, Any]:
+    frames = [
+        {
+            "file": Path(frame.filename).name,
+            "line": frame.lineno,
+            "function": frame.name,
+        }
+        for frame in traceback.extract_tb(exc.__traceback__)[-8:]
+    ]
+    return {"exception_type": type(exc).__name__, "frames": frames}
+
+
+def _scan_failed_payload(request_id: str) -> dict[str, Any]:
+    return {"ok": False, "error": f"Scan failed; request_id={request_id}", "request_id": request_id}
+
+
 def _get_history_item(item_id: str) -> dict[str, Any] | None:
     with _HISTORY_LOCK:
         return next((item for item in _HISTORY if item["id"] == item_id), None)
@@ -568,9 +662,11 @@ def _scan_uploaded_file(path: Path, use_llm: bool) -> dict[str, Any]:
 
 def scan_uploaded_artifact(
     upload_id: str,
-    use_llm: bool = False,
+    use_llm: bool = True,
     graph_scan: Callable[[Path, bool], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    _configure_web_logging()
+    request_id = uuid.uuid4().hex[:12]
     now = time.time()
     with _UPLOAD_LOCK:
         _cleanup_uploads_locked(now)
@@ -587,24 +683,67 @@ def scan_uploaded_artifact(
     config, safe_config = _current_env_scan_config(use_llm)
     scanner = graph_scan or _scan_uploaded_file
     started = time.perf_counter()
+    logger.info(
+        "upload_scan_received request_id=%s upload_id=%s filename=%s bytes=%d sha256=%s use_llm=%s config=%s",
+        request_id,
+        upload_id,
+        upload_summary["filename"],
+        upload_summary["size_bytes"],
+        upload_summary["sha256"],
+        use_llm,
+        json.dumps(safe_config, sort_keys=True),
+    )
     try:
+        if _SCAN_LOCK.locked():
+            logger.info(
+                "upload_scan_waiting_for_lock request_id=%s upload_id=%s",
+                request_id,
+                upload_id,
+            )
+        queued_at = time.perf_counter()
         with _SCAN_LOCK:
+            queue_ms = int((time.perf_counter() - queued_at) * 1000)
+            logger.info(
+                "upload_scan_started request_id=%s upload_id=%s queue_ms=%d",
+                request_id,
+                upload_id,
+                queue_ms,
+            )
             with _temporary_scan_environment(config):
                 report = scanner(upload_path, use_llm)
+    except Exception as exc:
+        logger.error(
+            "upload_scan_failed request_id=%s upload_id=%s filename=%s use_llm=%s error=%s",
+            request_id,
+            upload_id,
+            upload_summary["filename"],
+            use_llm,
+            json.dumps(_exception_log_fields(exc), sort_keys=True),
+        )
+        raise
     finally:
         _discard_upload(upload_id)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    summary = summarize_report(report)
     history_item = _record_history(
         filename=upload_summary["filename"],
         report=report,
         config=safe_config,
         elapsed_ms=elapsed_ms,
     )
+    logger.info(
+        "upload_scan_completed request_id=%s upload_id=%s report_id=%s elapsed_ms=%d result=%s",
+        request_id,
+        upload_id,
+        history_item["id"],
+        elapsed_ms,
+        json.dumps(_scan_log_fields(report, summary), sort_keys=True),
+    )
     return {
         "ok": True,
         "report_id": history_item["id"],
         "upload": upload_summary,
-        "summary": summarize_report(report),
+        "summary": summary,
         "history_item": _history_summary(history_item),
     }
 
@@ -616,9 +755,11 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
     graph_scan = staticmethod(_scan_uploaded_file)
 
     def log_message(self, fmt: str, *args: object) -> None:
+        _configure_web_logging()
         logger.debug(fmt, *args)
 
     def do_GET(self) -> None:
+        _configure_web_logging()
         path = urlparse(self.path).path
         if path == "/health":
             self._json(HTTPStatus.OK, _health_payload())
@@ -662,8 +803,11 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
+        _configure_web_logging()
         path = urlparse(self.path).path
         if not self._require_api_auth(path):
+            return
+        if not self._require_same_origin():
             return
         if path == "/api/tickets":
             self._handle_create_ticket()
@@ -678,10 +822,13 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         self._handle_scan()
 
     def do_PUT(self) -> None:
+        _configure_web_logging()
         path = urlparse(self.path).path
         prefix = "/api/uploads/"
         if not path.startswith(prefix) or path == prefix:
             self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
+            return
+        if not self._require_same_origin():
             return
         upload_id = path[len(prefix) :]
         self._handle_upload_put(upload_id)
@@ -692,6 +839,13 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         if _request_is_authorized(self.headers):
             return True
         self._auth_error()
+        return False
+
+    def _require_same_origin(self) -> bool:
+        if _request_origin_allowed(self.headers):
+            return True
+        self.close_connection = True
+        self._json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "Cross-site request rejected"})
         return False
 
     def _auth_error(self) -> None:
@@ -765,13 +919,31 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
 
     def _handle_scan_upload(self, upload_id: str) -> None:
+        request_id = uuid.uuid4().hex[:12]
         try:
             payload = self._read_json_body()
-            use_llm = self._json_boolean(payload, "use_llm", default=False)
+            use_llm = self._json_boolean(payload, "use_llm", default=True)
         except (ValueError, json.JSONDecodeError) as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
-        result = scan_uploaded_artifact(upload_id, use_llm=use_llm)
+        logger.info(
+            "upload_scan_api_received request_id=%s upload_id=%s use_llm=%s",
+            request_id,
+            upload_id,
+            use_llm,
+        )
+        try:
+            result = scan_uploaded_artifact(upload_id, use_llm=use_llm)
+        except Exception as exc:
+            logger.error(
+                "upload_scan_api_failed request_id=%s upload_id=%s use_llm=%s error=%s",
+                request_id,
+                upload_id,
+                use_llm,
+                json.dumps(_exception_log_fields(exc), sort_keys=True),
+            )
+            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, _scan_failed_payload(request_id))
+            return
         if result["ok"]:
             self._json(HTTPStatus.OK, result)
             return
@@ -781,52 +953,106 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         self._json(status, result)
 
     def _handle_scan(self) -> None:
+        request_id = uuid.uuid4().hex[:12]
         length = self.headers.get("Content-Length")
         if length is None:
+            logger.warning("web_scan_rejected request_id=%s reason=missing_content_length", request_id)
             self._json(HTTPStatus.LENGTH_REQUIRED, {"ok": False, "error": "Missing Content-Length"})
             return
         try:
             content_length = int(length)
         except ValueError:
+            logger.warning("web_scan_rejected request_id=%s reason=invalid_content_length", request_id)
             self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid Content-Length"})
             return
         if content_length <= 0:
+            logger.warning("web_scan_rejected request_id=%s reason=empty_upload", request_id)
             self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Empty upload"})
             return
         if content_length > self.max_upload_bytes:
+            logger.warning(
+                "web_scan_rejected request_id=%s reason=upload_too_large bytes=%d max_bytes=%d",
+                request_id,
+                content_length,
+                self.max_upload_bytes,
+            )
             self._json(
                 HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"ok": False, "error": "Upload is too large"}
             )
             return
 
         parsed = urlparse(self.path)
-        use_llm = parse_qs(parsed.query).get("use_llm", ["false"])[0].lower() == "true"
+        use_llm = parse_qs(parsed.query).get("use_llm", ["true"])[0].lower() == "true"
         config, safe_config = _current_env_scan_config(use_llm)
         filename = _safe_upload_name(self.headers.get("X-Filename"))
         upload_root = Path(tempfile.mkdtemp(prefix="skillspector_web_"))
         upload_path = upload_root / filename
+        total_started = time.perf_counter()
+        logger.info(
+            "web_scan_received request_id=%s client=%s filename=%s bytes=%d use_llm=%s config=%s",
+            request_id,
+            self.client_address[0] if self.client_address else "",
+            filename,
+            content_length,
+            use_llm,
+            json.dumps(safe_config, sort_keys=True),
+        )
         try:
             remaining = content_length
+            digest = hashlib.sha256()
             with upload_path.open("wb") as fh:
                 while remaining:
                     chunk = self.rfile.read(min(CHUNK_SIZE, remaining))
                     if not chunk:
                         break
                     fh.write(chunk)
+                    digest.update(chunk)
                     remaining -= len(chunk)
             if remaining:
+                logger.warning(
+                    "web_scan_rejected request_id=%s reason=incomplete_upload missing_bytes=%d",
+                    request_id,
+                    remaining,
+                )
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Incomplete upload"})
                 return
+            logger.info(
+                "web_scan_upload_complete request_id=%s filename=%s bytes=%d sha256=%s",
+                request_id,
+                filename,
+                content_length,
+                digest.hexdigest(),
+            )
             started = time.perf_counter()
+            if _SCAN_LOCK.locked():
+                logger.info("web_scan_waiting_for_lock request_id=%s", request_id)
+            queued_at = time.perf_counter()
             with _SCAN_LOCK:
+                queue_ms = int((time.perf_counter() - queued_at) * 1000)
+                logger.info(
+                    "web_scan_started request_id=%s queue_ms=%d use_llm=%s",
+                    request_id,
+                    queue_ms,
+                    use_llm,
+                )
                 with _temporary_scan_environment(config):
                     report = self.graph_scan(upload_path, use_llm)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            total_ms = int((time.perf_counter() - total_started) * 1000)
             history_item = _record_history(
                 filename=filename,
                 report=report,
                 config=safe_config,
                 elapsed_ms=elapsed_ms,
+            )
+            summary = summarize_report(report)
+            logger.info(
+                "web_scan_completed request_id=%s report_id=%s elapsed_ms=%d total_ms=%d result=%s",
+                request_id,
+                history_item["id"],
+                elapsed_ms,
+                total_ms,
+                json.dumps(_scan_log_fields(report, summary), sort_keys=True),
             )
             self._json(
                 HTTPStatus.OK,
@@ -839,11 +1065,23 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
                 },
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Web scan failed: %s", exc)
-            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            logger.error(
+                "web_scan_failed request_id=%s filename=%s use_llm=%s error=%s",
+                request_id,
+                filename,
+                use_llm,
+                json.dumps(_exception_log_fields(exc), sort_keys=True),
+            )
+            self._json(HTTPStatus.BAD_REQUEST, _scan_failed_payload(request_id))
         except Exception as exc:
-            logger.exception("Unexpected Web scan failure")
-            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
+            logger.error(
+                "web_scan_failed request_id=%s filename=%s use_llm=%s error=%s",
+                request_id,
+                filename,
+                use_llm,
+                json.dumps(_exception_log_fields(exc), sort_keys=True),
+            )
+            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, _scan_failed_payload(request_id))
         finally:
             shutil.rmtree(upload_root, ignore_errors=True)
 
@@ -921,6 +1159,13 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
                 record.sha256 = digest.hexdigest()
                 payload = _upload_summary(record)
             success = True
+            logger.info(
+                "upload_ticket_upload_complete upload_id=%s filename=%s bytes=%d sha256=%s",
+                upload_id,
+                payload["filename"],
+                payload["size_bytes"],
+                payload["sha256"],
+            )
             self._json(HTTPStatus.OK, {"ok": True, "upload": payload})
         except OSError as exc:
             logger.warning("Upload failed: %s", exc)
@@ -963,6 +1208,7 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
 
 
 def run_server(host: str, port: int, max_upload_mb: int) -> None:
+    _configure_web_logging()
     if not _is_loopback_host(host) and not _auth_configured():
         raise typer.BadParameter(
             f"Set {AUTH_TOKEN_ENV} or {API_USERNAME_ENV}/{API_PASSWORD_ENV} before binding "

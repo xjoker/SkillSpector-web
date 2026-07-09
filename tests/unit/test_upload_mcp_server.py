@@ -20,6 +20,34 @@ async def test_upload_mcp_server_registers_upload_tools_only() -> None:
     } <= tools
     assert "scan_skill" not in tools
 
+    scan_tool = next(tool for tool in await server.list_tools() if tool.name == "skills_scan_upload")
+    assert scan_tool.inputSchema["properties"]["use_llm"]["default"] is True
+
+
+async def test_upload_mcp_scan_returns_generic_error_when_scanner_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("mcp")
+
+    def broken_scan(upload_id: str, use_llm: bool = True) -> dict[str, object]:
+        raise RuntimeError(
+            f"provider failed for {upload_id} with secret-token "
+            "http://url-user:url-pass@localhost:11434/v1"
+        )
+
+    monkeypatch.setattr(upload_mcp_server, "scan_uploaded_artifact", broken_scan)
+    server = upload_mcp_server.build_server()
+
+    result = await server.call_tool("skills_scan_upload", {"upload_id": "upload-1"})
+    _, data = result
+
+    assert data["ok"] is False
+    assert data["error"].startswith("Scan failed; request_id=")
+    assert data["request_id"]
+    assert "secret-token" not in str(result)
+    assert "url-user" not in str(result)
+    assert "url-pass" not in str(result)
+
 
 def test_upload_mcp_http_rejects_remote_bind_without_auth(
     monkeypatch: pytest.MonkeyPatch,
