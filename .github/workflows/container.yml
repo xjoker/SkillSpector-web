@@ -84,5 +84,20 @@ jobs:
             -e SKILLSPECTOR_AUTH_TOKEN=verify-token \
             "$image" web --port 8477
 
-          docker exec "$container" python -c \
-            "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8477/health', timeout=5)); assert data['ok'] is True, data; assert data['release_version'] == '${{ steps.meta.outputs.version }}', data; assert data['git_commit'] == '${{ steps.meta.outputs.git_commit }}', data; assert data['schema_version'] == '${SCHEMA_VERSION}', data; print(json.dumps(data, sort_keys=True))"
+          for attempt in $(seq 1 30); do
+            if health="$(
+              docker exec "$container" python -c \
+                "import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:8477/health', timeout=2)), sort_keys=True))" \
+                2>/dev/null
+            )"; then
+              echo "$health"
+              HEALTH_JSON="$health" python -c \
+                "import json, os; data=json.loads(os.environ['HEALTH_JSON']); assert data['ok'] is True, data; assert data['release_version'] == '${{ steps.meta.outputs.version }}', data; assert data['git_commit'] == '${{ steps.meta.outputs.git_commit }}', data; assert data['schema_version'] == '${SCHEMA_VERSION}', data"
+              exit 0
+            fi
+            echo "Waiting for /health (${attempt}/30)..."
+            sleep 1
+          done
+
+          docker logs "$container"
+          exit 1
