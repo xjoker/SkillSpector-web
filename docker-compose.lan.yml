@@ -1,0 +1,4 @@
+services:
+  skillspector-adapter:
+    ports:
+      - "${SKILLSPECTOR_LAN_BIND_IP:?set SKILLSPECTOR_LAN_BIND_IP explicitly}:18477:8477"

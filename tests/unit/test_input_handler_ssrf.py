@@ -84,7 +84,8 @@ class TestGitCloneSSRF:
     def test_github_url_allowed(self, mock_run) -> None:
         mock_run.return_value = None
         handler = InputHandler()
-        handler._clone_git("https://github.com/NVIDIA/SkillSpector.git")
+        with patch("skillspector.input_handler._is_private_ip", return_value=False):
+            handler._clone_git("https://github.com/NVIDIA/SkillSpector.git")
         mock_run.assert_called_once()
         handler.cleanup()
 
@@ -92,7 +93,8 @@ class TestGitCloneSSRF:
     def test_gitlab_url_allowed(self, mock_run) -> None:
         mock_run.return_value = None
         handler = InputHandler()
-        handler._clone_git("https://gitlab.com/user/repo.git")
+        with patch("skillspector.input_handler._is_private_ip", return_value=False):
+            handler._clone_git("https://gitlab.com/user/repo.git")
         mock_run.assert_called_once()
         handler.cleanup()
 
@@ -125,9 +127,10 @@ class TestDownloadSSRF:
         mock_response.content = b"# SKILL.md content"
         mock_response.headers = {}
         handler = InputHandler()
-        result = handler._download_file(
-            "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/SKILL.md"
-        )
+        with patch("skillspector.input_handler._is_private_ip", return_value=False):
+            result = handler._download_file(
+                "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/SKILL.md"
+            )
         assert result.is_dir()
         handler.cleanup()
 
@@ -139,9 +142,10 @@ class TestDownloadSSRF:
         mock_client.get.return_value.headers = {}
         handler = InputHandler()
         try:
-            handler._download_file(
-                "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/SKILL.md"
-            )
+            with patch("skillspector.input_handler._is_private_ip", return_value=False):
+                handler._download_file(
+                    "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/SKILL.md"
+                )
         except Exception:
             pass
         mock_client_cls.assert_called_once_with(follow_redirects=False, timeout=30)

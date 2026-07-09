@@ -1,4 +1,16 @@
-.PHONY: help install install-dev langgraph-dev test test-unit test-provider openai anthropic nv_build test-integration test-cov test-ci lint lint-fix format format-check clean build docker-build docker-smoke
+.PHONY: help install install-dev langgraph-dev test test-unit test-provider openai anthropic nv_build test-integration test-cov test-ci lint lint-fix format format-check clean build docker-build docker-release-build docker-smoke
+
+GIT_DIRTY := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo -dirty)
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(GIT_DIRTY)
+VERSION ?= $(shell cat VERSION 2>/dev/null || echo dev)
+SCHEMA_VERSION ?= none
+IMAGE ?= ghcr.io/xjoker/skillspector-adapter
+LOCAL_IMAGE ?= skillspector
+DOCKER_PLATFORM ?= linux/amd64
+DOCKER_TAGS = -t $(IMAGE):$(VERSION) -t $(IMAGE):dev -t $(IMAGE):latest -t $(LOCAL_IMAGE)
+DOCKER_BUILD_ARGS = --build-arg SKILLSPECTOR_GIT_COMMIT=$(GIT_COMMIT) \
+	--build-arg SKILLSPECTOR_SCHEMA_VERSION=$(SCHEMA_VERSION) \
+	--build-arg SKILLSPECTOR_RELEASE_VERSION=$(VERSION)
 
 # Prefer uv if available, else use pip (set when Makefile is parsed)
 UV := $(shell command -v uv 2>/dev/null)
@@ -44,6 +56,7 @@ help:
 	@echo "  make clean          - Remove build artifacts and cache files"
 	@echo "  make build          - Build the package"
 	@echo "  make docker-build   - Build the Docker image"
+	@echo "  make docker-release-build - Build release image with --no-cache"
 	@echo "  make docker-smoke   - Build and smoke test the Docker image"
 
 install:
@@ -147,9 +160,16 @@ build: clean
 
 # Build the Docker image
 docker-build:
-	docker build -t skillspector .
+	docker buildx build --platform=$(DOCKER_PLATFORM) --load \
+		$(DOCKER_BUILD_ARGS) \
+		$(DOCKER_TAGS) .
+
+# Build the Docker image without cache for release testing
+docker-release-build:
+	docker buildx build --platform=$(DOCKER_PLATFORM) --no-cache --load \
+		$(DOCKER_BUILD_ARGS) \
+		$(DOCKER_TAGS) .
 
 # Build and smoke test the Docker image
 docker-smoke: docker-build
-	tests/docker/smoke.sh
-
+	SKILLSPECTOR_DOCKER_IMAGE=$(IMAGE):$(VERSION) tests/docker/smoke.sh

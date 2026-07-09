@@ -5,15 +5,20 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
+import secrets
 import shutil
 import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +28,7 @@ from urllib.parse import parse_qs, unquote, urlparse, urlsplit, urlunsplit
 
 import typer
 
+from skillspector import __version__
 from skillspector.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +36,15 @@ logger = get_logger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_MAX_UPLOAD_MB = 50
+DEFAULT_UPLOAD_TICKET_TTL_SECONDS = 15 * 60
+DEFAULT_UPLOAD_RETENTION_SECONDS = 60 * 60
+AUTH_TOKEN_ENV = "SKILLSPECTOR_AUTH_TOKEN"
+API_USERNAME_ENV = "SKILLSPECTOR_API_USERNAME"
+API_PASSWORD_ENV = "SKILLSPECTOR_API_PASSWORD"
+PUBLIC_URL_ENV = "SKILLSPECTOR_PUBLIC_URL"
+GIT_COMMIT_ENV = "SKILLSPECTOR_GIT_COMMIT"
+SCHEMA_VERSION_ENV = "SKILLSPECTOR_SCHEMA_VERSION"
+RELEASE_VERSION_ENV = "SKILLSPECTOR_RELEASE_VERSION"
 CHUNK_SIZE = 1024 * 1024
 MAX_HISTORY_ITEMS = 50
 MODEL_SLOTS = (
@@ -53,9 +68,38 @@ SCAN_ENV_KEYS = (
     "NVIDIA_INFERENCE_KEY",
 )
 STRUCTURED_OUTPUT_METHODS = {"json_schema", "json_mode", "function_calling", "text_json"}
+
+
+def _health_payload() -> dict[str, str | bool]:
+    return {
+        "ok": True,
+        "service": "skillspector",
+        "version": __version__,
+        "release_version": os.environ.get(RELEASE_VERSION_ENV, "").strip() or "dev",
+        "git_commit": os.environ.get(GIT_COMMIT_ENV, "").strip() or "unknown",
+        "schema_version": os.environ.get(SCHEMA_VERSION_ENV, "").strip() or "none",
+    }
+
+
+@dataclass
+class _UploadRecord:
+    upload_id: str
+    token_hash: str
+    created_at: float
+    expires_at: float
+    max_bytes: int
+    filename_hint: str
+    upload_path: Path | None = None
+    uploaded_at: float | None = None
+    size_bytes: int = 0
+    sha256: str = ""
+
+
 _SCAN_LOCK = threading.Lock()
 _HISTORY_LOCK = threading.Lock()
 _HISTORY: list[dict[str, Any]] = []
+_UPLOAD_LOCK = threading.Lock()
+_UPLOADS: dict[str, _UploadRecord] = {}
 
 app = typer.Typer(
     name="skillspector-web",
@@ -95,6 +139,7 @@ INDEX_HTML = """<!doctype html>
       <label>Meta 模型<input id="metaModel" autocomplete="off" placeholder="可选，仅覆盖 meta_analyzer"></label>
       <label>Structured output<select id="structuredOutput"><option value="json_schema">json_schema</option><option value="text_json">text_json / local compatible</option><option value="json_mode">json_mode</option><option value="function_calling">function_calling</option></select></label>
       <label>LLM 并发<input id="llmConcurrency" type="number" min="1" max="16" value="1"></label>
+      <label>访问令牌<input id="authToken" type="password" autocomplete="off" placeholder="Bearer token"></label>
       <label>API Key<input id="apiKey" type="password" autocomplete="off" placeholder="仅本次请求使用，不写入历史"></label>
       <label>OpenAI Base URL<input id="baseUrl" autocomplete="off" placeholder="仅 openai 兼容端点需要"></label>
       <div class="row"><label class="check"><input id="staticOnly" type="checkbox" checked> 静态扫描</label><button id="scan" type="submit">开始检查</button></div>
@@ -106,13 +151,16 @@ INDEX_HTML = """<!doctype html>
 <script>
 const $=id=>document.getElementById(id),form=$("form"),file=$("file"),scan=$("scan"),state=$("state"),result=$("result"),historyBox=$("history"),staticOnly=$("staticOnly");
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-function headersFor(picked){const h={"X-Filename":encodeURIComponent(picked.name),"Content-Type":"application/octet-stream","X-Skillspector-Provider":$("provider").value,"X-Skillspector-Structured-Output":$("structuredOutput").value,"X-Skillspector-LLM-Max-Concurrency":$("llmConcurrency").value||"1"};for(const [id,key] of [["model","X-Skillspector-Model"],["metaModel","X-Skillspector-Meta-Model"],["apiKey","X-Skillspector-Api-Key"],["baseUrl","X-Skillspector-Base-Url"]]){const v=$(id).value.trim();if(v)h[key]=v}return h}
+function authHeaders(){const token=$("authToken").value.trim();if(token){sessionStorage.setItem("skillspectorAuthToken",token);return {"Authorization":`Bearer ${token}`}}sessionStorage.removeItem("skillspectorAuthToken");return {}}
+function headersFor(picked){const h={...authHeaders(),"X-Filename":encodeURIComponent(picked.name),"Content-Type":"application/octet-stream","X-Skillspector-Provider":$("provider").value,"X-Skillspector-Structured-Output":$("structuredOutput").value,"X-Skillspector-LLM-Max-Concurrency":$("llmConcurrency").value||"1"};for(const [id,key] of [["model","X-Skillspector-Model"],["metaModel","X-Skillspector-Meta-Model"],["apiKey","X-Skillspector-Api-Key"],["baseUrl","X-Skillspector-Base-Url"]]){const v=$(id).value.trim();if(v)h[key]=v}return h}
+async function apiFetch(url,options={}){const headers={...(options.headers||{}),...authHeaders()};return fetch(url,{...options,headers})}
 function findingRow(f){const loc=f.location||{};const rule=f.rule_id||f.id||"-",file=f.file||loc.file||"-",line=f.start_line||loc.start_line||"-",msg=f.message||f.explanation||f.finding||"-";return `<tr><td><span class="pill ${esc(f.severity)}">${esc(f.severity)}</span></td><td>${esc(rule)}</td><td>${esc(file)}:${esc(line)}</td><td>${esc(msg)}</td></tr>`}
 function renderReport(filename,report,id){const r=report||{},risk=r.risk_assessment||{},items=r.issues||r.findings||[],meta=r.metadata||{},components=r.components||[];result.className="result";result.innerHTML=`<p class="title">${esc(filename||"扫描详情")}</p><div class="score"><div class="metric"><span>风险评分</span><strong class="${esc(risk.severity)}">${esc(risk.score??0)}/100</strong></div><div class="metric"><span>严重度</span><strong class="${esc(risk.severity)}">${esc(risk.severity??"LOW")}</strong></div><div class="metric"><span>建议</span><strong>${esc(risk.recommendation??"SAFE")}</strong></div><div class="metric"><span>问题</span><strong>${items.length}</strong></div></div><div class="details"><div class="kv"><b>${esc(r.skill?.name||"unknown")}</b>Skill</div><div class="kv"><b>${esc(meta.llm_requested?"LLM":"Static")}</b>模式</div><div class="kv"><b>${components.length}</b>组件</div><div class="kv"><b>${esc(id||"-")}</b>Run ID</div></div>${items.length?`<table><thead><tr><th>等级</th><th>规则</th><th>位置</th><th>说明</th></tr></thead><tbody>${items.map(findingRow).join("")}</tbody></table>`:"<p class=muted>未发现安全问题。</p>"}`;}
 function renderError(message){result.className="result error";result.innerHTML=`<p class="title">检查失败</p><p>${esc(message)}</p>`}
-async function loadHistory(){const res=await fetch("/api/history");const data=await res.json();const rows=data.history||[];historyBox.innerHTML=rows.length?`<table><thead><tr><th>时间</th><th>文件</th><th>风险</th><th>问题</th><th>模型</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.scanned_at)}</td><td>${esc(x.filename)}</td><td><span class="pill ${esc(x.severity)}">${esc(x.score)}/100 ${esc(x.severity)}</span></td><td>${esc(x.issue_count)}</td><td>${esc(x.config?.model||"default")}</td><td><button class="ghost" data-id="${esc(x.id)}">详情</button></td></tr>`).join("")}</tbody></table>`:"<p class=muted>暂无历史。</p>"}
-form.addEventListener("submit",async e=>{e.preventDefault();const picked=file.files[0];if(!picked)return;scan.disabled=true;state.textContent="检查中";result.className="result";result.innerHTML="<p class=title>检查中</p><p class=muted>正在分析上传内容。</p>";try{const qs=new URLSearchParams({use_llm:String(!staticOnly.checked)});const res=await fetch(`/api/scan?${qs}`,{method:"POST",headers:headersFor(picked),body:picked});const data=await res.json();if(!data.ok)renderError(data.error);else{renderReport(data.filename,data.report,data.id);await loadHistory()}}catch(err){renderError(err.message)}finally{scan.disabled=false;state.textContent="就绪"}});
-historyBox.addEventListener("click",async e=>{const id=e.target?.dataset?.id;if(!id)return;const res=await fetch(`/api/history/${encodeURIComponent(id)}`);const data=await res.json();if(data.ok)renderReport(data.item.filename,data.item.report,data.item.id);else renderError(data.error)});
+async function loadHistory(){const res=await apiFetch("/api/history");const data=await res.json();const rows=data.history||[];historyBox.innerHTML=rows.length?`<table><thead><tr><th>时间</th><th>文件</th><th>风险</th><th>问题</th><th>模型</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.scanned_at)}</td><td>${esc(x.filename)}</td><td><span class="pill ${esc(x.severity)}">${esc(x.score)}/100 ${esc(x.severity)}</span></td><td>${esc(x.issue_count)}</td><td>${esc(x.config?.model||"default")}</td><td><button class="ghost" data-id="${esc(x.id)}">详情</button></td></tr>`).join("")}</tbody></table>`:"<p class=muted>暂无历史。</p>"}
+form.addEventListener("submit",async e=>{e.preventDefault();const picked=file.files[0];if(!picked)return;scan.disabled=true;state.textContent="检查中";result.className="result";result.innerHTML="<p class=title>检查中</p><p class=muted>正在分析上传内容。</p>";try{const qs=new URLSearchParams({use_llm:String(!staticOnly.checked)});const res=await apiFetch(`/api/scan?${qs}`,{method:"POST",headers:headersFor(picked),body:picked});const data=await res.json();if(!data.ok)renderError(data.error);else{renderReport(data.filename,data.report,data.id);await loadHistory()}}catch(err){renderError(err.message)}finally{scan.disabled=false;state.textContent="就绪"}});
+$("authToken").value=sessionStorage.getItem("skillspectorAuthToken")||"";
+historyBox.addEventListener("click",async e=>{const id=e.target?.dataset?.id;if(!id)return;const res=await apiFetch(`/api/history/${encodeURIComponent(id)}`);const data=await res.json();if(data.ok)renderReport(data.item.filename,data.item.report,data.item.id);else renderError(data.error)});
 $("refresh").addEventListener("click",loadHistory);loadHistory();
 </script>
 </body>
@@ -137,6 +185,147 @@ def _safe_upload_name(raw_name: str | None) -> str:
 
 def _header_value(headers: Any, name: str) -> str:
     return (headers.get(name) or "").strip()
+
+
+def _utc_timestamp(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _bearer_token(headers: Any) -> str | None:
+    value = _header_value(headers, "Authorization")
+    scheme, _, token = value.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token.strip()
+
+
+def _basic_credentials(headers: Any) -> tuple[str, str] | None:
+    value = _header_value(headers, "Authorization")
+    scheme, _, encoded = value.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return None
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+    username, sep, password = decoded.partition(":")
+    if not sep:
+        return None
+    return username, password
+
+
+def _auth_configured() -> bool:
+    return bool(os.environ.get(AUTH_TOKEN_ENV)) or bool(
+        os.environ.get(API_USERNAME_ENV) and os.environ.get(API_PASSWORD_ENV)
+    )
+
+
+def _request_is_authorized(headers: Any) -> bool:
+    token = os.environ.get(AUTH_TOKEN_ENV)
+    if token:
+        supplied = _bearer_token(headers)
+        if supplied is not None and secrets.compare_digest(supplied, token):
+            return True
+
+    username = os.environ.get(API_USERNAME_ENV)
+    password = os.environ.get(API_PASSWORD_ENV)
+    if username and password:
+        credentials = _basic_credentials(headers)
+        if credentials is not None:
+            supplied_user, supplied_password = credentials
+            return secrets.compare_digest(supplied_user, username) and secrets.compare_digest(
+                supplied_password, password
+            )
+
+    return not _auth_configured()
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host in {"", "127.0.0.1", "localhost", "::1"}
+
+
+def _cleanup_uploads_locked(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    expired_ids: list[str] = []
+    for upload_id, record in _UPLOADS.items():
+        uploaded_expired = bool(
+            record.uploaded_at is not None
+            and record.uploaded_at + DEFAULT_UPLOAD_RETENTION_SECONDS <= now
+        )
+        ticket_expired = record.upload_path is None and record.expires_at <= now
+        if uploaded_expired or ticket_expired:
+            expired_ids.append(upload_id)
+    for upload_id in expired_ids:
+        record = _UPLOADS.pop(upload_id)
+        if record.upload_path is not None:
+            shutil.rmtree(record.upload_path.parent, ignore_errors=True)
+
+
+def _discard_upload(upload_id: str) -> None:
+    upload_root: Path | None = None
+    with _UPLOAD_LOCK:
+        record = _UPLOADS.pop(upload_id, None)
+        if record is not None and record.upload_path is not None:
+            upload_root = record.upload_path.parent
+    if upload_root is not None:
+        shutil.rmtree(upload_root, ignore_errors=True)
+
+
+def create_upload_ticket(
+    base_url: str,
+    filename: str | None = None,
+    max_bytes: int | None = None,
+    ttl_seconds: int = DEFAULT_UPLOAD_TICKET_TTL_SECONDS,
+) -> dict[str, Any]:
+    token = secrets.token_urlsafe(32)
+    upload_id = uuid.uuid4().hex
+    now = time.time()
+    ttl = max(1, min(int(ttl_seconds), DEFAULT_UPLOAD_TICKET_TTL_SECONDS))
+    default_limit = _max_upload_bytes()
+    byte_limit = default_limit if max_bytes is None else max(1, min(int(max_bytes), default_limit))
+    record = _UploadRecord(
+        upload_id=upload_id,
+        token_hash=_token_hash(token),
+        created_at=now,
+        expires_at=now + ttl,
+        max_bytes=byte_limit,
+        filename_hint=_safe_upload_name(filename),
+    )
+    with _UPLOAD_LOCK:
+        _cleanup_uploads_locked(now)
+        _UPLOADS[upload_id] = record
+    upload_url = f"{base_url.rstrip('/')}/api/uploads/{upload_id}"
+    return {
+        "ok": True,
+        "upload_id": upload_id,
+        "upload_url": upload_url,
+        "method": "PUT",
+        "expires_at": _utc_timestamp(record.expires_at),
+        "max_bytes": byte_limit,
+        "headers": {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/octet-stream",
+            "X-Filename": record.filename_hint,
+        },
+    }
+
+
+def _upload_summary(record: _UploadRecord) -> dict[str, Any]:
+    return {
+        "upload_id": record.upload_id,
+        "filename": record.filename_hint,
+        "created_at": _utc_timestamp(record.created_at),
+        "expires_at": _utc_timestamp(record.expires_at),
+        "uploaded_at": _utc_timestamp(record.uploaded_at) if record.uploaded_at else None,
+        "complete": record.upload_path is not None and record.uploaded_at is not None,
+        "size_bytes": record.size_bytes,
+        "sha256": record.sha256,
+        "max_bytes": record.max_bytes,
+    }
 
 
 def _scan_config_from_headers(headers: Any) -> dict[str, str]:
@@ -197,6 +386,101 @@ def _redacted_config(config: dict[str, str], use_llm: bool) -> dict[str, object]
     }
 
 
+def _current_env_scan_config(use_llm: bool) -> tuple[dict[str, str], dict[str, object]]:
+    provider = os.environ.get("SKILLSPECTOR_PROVIDER", "nv_build")
+    if provider not in {"nv_build", "openai", "anthropic"}:
+        provider = "nv_build"
+    api_key_name = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "nv_build": "NVIDIA_INFERENCE_KEY",
+    }[provider]
+    config = {
+        "provider": provider,
+        "model": os.environ.get("SKILLSPECTOR_MODEL", ""),
+        "meta_model": os.environ.get("SKILLSPECTOR_META_MODEL", ""),
+        "structured_output": os.environ.get(
+            "SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD", "json_schema"
+        ).replace("-", "_"),
+        "llm_max_concurrency": os.environ.get("SKILLSPECTOR_LLM_MAX_CONCURRENCY", "1"),
+        "api_key": os.environ.get(api_key_name, ""),
+        "base_url": os.environ.get("OPENAI_BASE_URL", ""),
+    }
+    if config["structured_output"] not in STRUCTURED_OUTPUT_METHODS:
+        config["structured_output"] = "json_schema"
+    try:
+        config["llm_max_concurrency"] = str(max(1, min(16, int(config["llm_max_concurrency"]))))
+    except ValueError:
+        config["llm_max_concurrency"] = "1"
+    return config, _redacted_config(config, use_llm)
+
+
+def summarize_report(report: dict[str, Any]) -> dict[str, Any]:
+    risk = report.get("risk_assessment") or {}
+    issues = report.get("issues") or report.get("findings") or []
+    components = report.get("components") or []
+    raw_score = risk.get("score", 0)
+    try:
+        score = int(raw_score)
+    except (TypeError, ValueError):
+        score = 0
+    severity = str(risk.get("severity") or "LOW").upper()
+    recommendation = str(risk.get("recommendation") or "SAFE").upper()
+    if (
+        recommendation in {"DO_NOT_INSTALL", "BLOCK", "BLOCKED"}
+        or severity
+        in {
+            "HIGH",
+            "CRITICAL",
+        }
+        or score >= 70
+    ):
+        verdict = "block"
+    elif issues or severity == "MEDIUM" or score >= 30:
+        verdict = "warn"
+    else:
+        verdict = "safe"
+    top_findings = []
+    for issue in issues[:5]:
+        location = issue.get("location") or {}
+        top_findings.append(
+            {
+                "severity": issue.get("severity", ""),
+                "rule_id": issue.get("rule_id") or issue.get("id") or "",
+                "file": issue.get("file") or location.get("file") or "",
+                "line": issue.get("start_line") or location.get("start_line") or "",
+                "message": issue.get("message")
+                or issue.get("explanation")
+                or issue.get("finding")
+                or "",
+            }
+        )
+    return {
+        "verdict": verdict,
+        "score": score,
+        "severity": severity,
+        "recommendation": recommendation,
+        "issue_count": len(issues),
+        "component_count": len(components),
+        "top_findings": top_findings,
+    }
+
+
+def get_report_item(report_id: str, include_raw: bool = False) -> dict[str, Any]:
+    item = _get_history_item(report_id)
+    if item is None:
+        return {"ok": False, "error": "Report not found"}
+    payload = {
+        "ok": True,
+        "report_id": item["id"],
+        "summary": summarize_report(item["report"]),
+        "history_item": _history_summary(item),
+    }
+    if include_raw:
+        payload["report"] = item["report"]
+    return payload
+
+
 @contextmanager
 def _temporary_scan_environment(config: dict[str, str]) -> Iterator[None]:
     """Apply per-request provider/model env overrides while a scan runs."""
@@ -224,8 +508,8 @@ def _temporary_scan_environment(config: dict[str, str]) -> Iterator[None]:
     model_config_snapshot = dict(constants.MODEL_CONFIG)
     default_model_snapshot = constants._SKILLSPECTOR_DEFAULT_MODEL
     try:
-        for key, value in env_updates.items():
-            os.environ[key] = value
+        for env_key, env_value in env_updates.items():
+            os.environ[env_key] = env_value
 
         provider = get_metadata_provider()
         model_config = {slot: provider.resolve_model(slot) for slot in MODEL_SLOTS}
@@ -240,11 +524,11 @@ def _temporary_scan_environment(config: dict[str, str]) -> Iterator[None]:
         model_info._resolve_context_length.cache_clear()
         yield
     finally:
-        for key, value in env_snapshot.items():
+        for env_key, value in env_snapshot.items():
             if value is None:
-                os.environ.pop(key, None)
+                os.environ.pop(env_key, None)
             else:
-                os.environ[key] = value
+                os.environ[env_key] = value
         constants.MODEL_CONFIG.clear()
         constants.MODEL_CONFIG.update(model_config_snapshot)
         constants._SKILLSPECTOR_DEFAULT_MODEL = default_model_snapshot
@@ -312,10 +596,55 @@ def _scan_uploaded_file(path: Path, use_llm: bool) -> dict[str, Any]:
     )
     report_body = str(result.get("report_body") or "{}")
     report = json.loads(report_body)
+    if not isinstance(report, dict):
+        raise ValueError("Scanner returned a non-object JSON report")
     temp_dir = result.get("temp_dir_for_cleanup")
     if isinstance(temp_dir, str):
         shutil.rmtree(temp_dir, ignore_errors=True)
     return report
+
+
+def scan_uploaded_artifact(
+    upload_id: str,
+    use_llm: bool = False,
+    graph_scan: Callable[[Path, bool], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    now = time.time()
+    with _UPLOAD_LOCK:
+        _cleanup_uploads_locked(now)
+        record = _UPLOADS.get(upload_id)
+        if record is None:
+            return {"ok": False, "error": "Upload not found"}
+        upload_path = record.upload_path
+        if upload_path is None or record.uploaded_at is None:
+            return {"ok": False, "error": "Upload is not complete"}
+        upload_summary = _upload_summary(record)
+    if not upload_path.exists():
+        return {"ok": False, "error": "Uploaded file is missing"}
+
+    config, safe_config = _current_env_scan_config(use_llm)
+    scanner = graph_scan or _scan_uploaded_file
+    started = time.perf_counter()
+    try:
+        with _SCAN_LOCK:
+            with _temporary_scan_environment(config):
+                report = scanner(upload_path, use_llm)
+    finally:
+        _discard_upload(upload_id)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    history_item = _record_history(
+        filename=upload_summary["filename"],
+        report=report,
+        config=safe_config,
+        elapsed_ms=elapsed_ms,
+    )
+    return {
+        "ok": True,
+        "report_id": history_item["id"],
+        "upload": upload_summary,
+        "summary": summarize_report(report),
+        "history_item": _history_summary(history_item),
+    }
 
 
 class SkillSpectorWebHandler(BaseHTTPRequestHandler):
@@ -330,20 +659,7 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/health":
-            self._json(HTTPStatus.OK, {"ok": True})
-            return
-        if path == "/api/history":
-            with _HISTORY_LOCK:
-                history = [_history_summary(item) for item in _HISTORY]
-            self._json(HTTPStatus.OK, {"ok": True, "history": history})
-            return
-        if path.startswith("/api/history/"):
-            item_id = path.rsplit("/", 1)[-1]
-            item = _get_history_item(item_id)
-            if item is None:
-                self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "History item not found"})
-                return
-            self._json(HTTPStatus.OK, {"ok": True, "item": item})
+            self._json(HTTPStatus.OK, _health_payload())
             return
         if path == "/favicon.ico":
             self.send_response(HTTPStatus.NO_CONTENT)
@@ -353,13 +669,146 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         if path == "/":
             self._html(INDEX_HTML)
             return
+        if path.startswith("/api/"):
+            if not self._require_api_auth(path):
+                return
+            if path == "/api/history":
+                with _HISTORY_LOCK:
+                    history = [_history_summary(item) for item in _HISTORY]
+                self._json(HTTPStatus.OK, {"ok": True, "history": history})
+                return
+            if path.startswith("/api/reports/"):
+                report_id = path.rsplit("/", 1)[-1]
+                query = parse_qs(urlparse(self.path).query)
+                include_raw = query.get("include_raw", ["false"])[0].lower() == "true"
+                payload = get_report_item(report_id, include_raw=include_raw)
+                status = HTTPStatus.OK if payload["ok"] else HTTPStatus.NOT_FOUND
+                self._json(status, payload)
+                return
+            if path.startswith("/api/history/"):
+                item_id = path.rsplit("/", 1)[-1]
+                item = _get_history_item(item_id)
+                if item is None:
+                    self._json(
+                        HTTPStatus.NOT_FOUND, {"ok": False, "error": "History item not found"}
+                    )
+                    return
+                self._json(HTTPStatus.OK, {"ok": True, "item": item})
+                return
         self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/scan":
+        path = urlparse(self.path).path
+        if not self._require_api_auth(path):
+            return
+        if path == "/api/tickets":
+            self._handle_create_ticket()
+            return
+        if path.startswith("/api/scans/"):
+            upload_id = path.rsplit("/", 1)[-1]
+            self._handle_scan_upload(upload_id)
+            return
+        if path != "/api/scan":
             self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
             return
         self._handle_scan()
+
+    def do_PUT(self) -> None:
+        path = urlparse(self.path).path
+        prefix = "/api/uploads/"
+        if not path.startswith(prefix) or path == prefix:
+            self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
+            return
+        upload_id = path[len(prefix) :]
+        self._handle_upload_put(upload_id)
+
+    def _require_api_auth(self, path: str) -> bool:
+        if path.startswith("/api/uploads/"):
+            return True
+        if _request_is_authorized(self.headers):
+            return True
+        self._auth_error()
+        return False
+
+    def _auth_error(self) -> None:
+        payload = {"ok": False, "error": "Authentication required"}
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self._security_headers("application/json; charset=utf-8", len(encoded))
+        self.send_header("WWW-Authenticate", 'Bearer realm="SkillSpector"')
+        self.send_header("WWW-Authenticate", 'Basic realm="SkillSpector", charset="UTF-8"')
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _request_base_url(self) -> str:
+        configured = os.environ.get(PUBLIC_URL_ENV, "").strip()
+        if configured:
+            parsed = urlsplit(configured)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(f"{PUBLIC_URL_ENV} must be an http(s) URL")
+            path = parsed.path.rstrip("/")
+            return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+        host = _header_value(self.headers, "Host")
+        if not host:
+            address = self.server.server_address
+            if isinstance(address, tuple) and len(address) >= 2:
+                host = f"{address[0]}:{address[1]}"
+            else:
+                host = str(address)
+        return f"http://{host}"
+
+    @staticmethod
+    def _json_boolean(payload: dict[str, Any], key: str, default: bool = False) -> bool:
+        value = payload.get(key, default)
+        if isinstance(value, bool):
+            return value
+        raise ValueError(f"{key} must be a boolean")
+
+    def _read_json_body(self, max_bytes: int = 16 * 1024) -> dict[str, Any]:
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            return {}
+        try:
+            content_length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length") from exc
+        if content_length < 0 or content_length > max_bytes:
+            raise ValueError("Request body is too large")
+        if content_length == 0:
+            return {}
+        body = self.rfile.read(content_length)
+        payload = json.loads(body.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("JSON body must be an object")
+        return payload
+
+    def _handle_create_ticket(self) -> None:
+        try:
+            payload = self._read_json_body()
+            ticket = create_upload_ticket(
+                self._request_base_url(),
+                filename=payload.get("filename"),
+                max_bytes=payload.get("max_bytes"),
+                ttl_seconds=payload.get("ttl_seconds", DEFAULT_UPLOAD_TICKET_TTL_SECONDS),
+            )
+            self._json(HTTPStatus.CREATED, ticket)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+
+    def _handle_scan_upload(self, upload_id: str) -> None:
+        try:
+            payload = self._read_json_body()
+            use_llm = self._json_boolean(payload, "use_llm", default=False)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        result = scan_uploaded_artifact(upload_id, use_llm=use_llm)
+        if result["ok"]:
+            self._json(HTTPStatus.OK, result)
+            return
+        status = HTTPStatus.NOT_FOUND if result["error"] == "Upload not found" else HTTPStatus.CONFLICT
+        self._json(status, result)
 
     def _handle_scan(self) -> None:
         length = self.headers.get("Content-Length")
@@ -433,6 +882,93 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
         finally:
             shutil.rmtree(upload_root, ignore_errors=True)
 
+    def _handle_upload_put(self, upload_id: str) -> None:
+        length = self.headers.get("Content-Length")
+        if length is None:
+            self._json(HTTPStatus.LENGTH_REQUIRED, {"ok": False, "error": "Missing Content-Length"})
+            return
+        try:
+            content_length = int(length)
+        except ValueError:
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Invalid Content-Length"})
+            return
+        if content_length <= 0:
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Empty upload"})
+            return
+        token = _bearer_token(self.headers)
+        if token is None:
+            self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Missing bearer token"})
+            return
+
+        now = time.time()
+        upload_root: Path | None = None
+        upload_path: Path | None = None
+        with _UPLOAD_LOCK:
+            _cleanup_uploads_locked(now)
+            record = _UPLOADS.get(upload_id)
+            if record is None:
+                self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Upload ticket not found"})
+                return
+            if not secrets.compare_digest(record.token_hash, _token_hash(token)):
+                self._json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Invalid bearer token"})
+                return
+            if record.expires_at <= now:
+                _UPLOADS.pop(upload_id, None)
+                self._json(HTTPStatus.GONE, {"ok": False, "error": "Upload ticket expired"})
+                return
+            if record.upload_path is not None:
+                self._json(
+                    HTTPStatus.CONFLICT, {"ok": False, "error": "Upload ticket already used"}
+                )
+                return
+            byte_limit = min(record.max_bytes, self.max_upload_bytes)
+            if content_length > byte_limit:
+                self._json(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    {"ok": False, "error": "Upload is too large"},
+                )
+                return
+            record.filename_hint = _safe_upload_name(
+                self.headers.get("X-Filename") or record.filename_hint
+            )
+            upload_root = Path(tempfile.mkdtemp(prefix="skillspector_mcp_upload_"))
+            upload_path = upload_root / record.filename_hint
+            record.upload_path = upload_path
+
+        digest = hashlib.sha256()
+        remaining = content_length
+        success = False
+        try:
+            with upload_path.open("wb") as fh:
+                while remaining:
+                    chunk = self.rfile.read(min(CHUNK_SIZE, remaining))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+            if remaining:
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "Incomplete upload"})
+                return
+            with _UPLOAD_LOCK:
+                record.uploaded_at = time.time()
+                record.size_bytes = content_length
+                record.sha256 = digest.hexdigest()
+                payload = _upload_summary(record)
+            success = True
+            self._json(HTTPStatus.OK, {"ok": True, "upload": payload})
+        except OSError as exc:
+            logger.warning("Upload failed: %s", exc)
+            self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+        finally:
+            if not success:
+                with _UPLOAD_LOCK:
+                    current = _UPLOADS.get(upload_id)
+                    if current is record:
+                        current.upload_path = None
+                if upload_root is not None:
+                    shutil.rmtree(upload_root, ignore_errors=True)
+
     def _html(self, body: str) -> None:
         encoded = body.encode("utf-8")
         self.send_response(HTTPStatus.OK)
@@ -462,6 +998,11 @@ class SkillSpectorWebHandler(BaseHTTPRequestHandler):
 
 
 def run_server(host: str, port: int, max_upload_mb: int) -> None:
+    if not _is_loopback_host(host) and not _auth_configured():
+        raise typer.BadParameter(
+            f"Set {AUTH_TOKEN_ENV} or {API_USERNAME_ENV}/{API_PASSWORD_ENV} before binding "
+            "the Web/API server to a non-localhost interface."
+        )
     handler = type(
         "ConfiguredSkillSpectorWebHandler",
         (SkillSpectorWebHandler,),

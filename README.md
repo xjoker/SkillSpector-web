@@ -13,6 +13,9 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 
 ## Documentation
 
+- **[Fork deployment guide](FORK_README.md)** — Remote upload MCP, HTTP API, auth, and container usage for this fork.
+- **[Adapter deployment](docs/ADAPTER_DEPLOYMENT.md)** — Compose, image tags, environment variables, and rollout checks.
+- **[Upstream merge release SOP](docs/UPSTREAM_MERGE_RELEASE_SOP.md)** — How to merge NVIDIA upstream updates, validate the fork, build images, and release.
 - **[Development guide](docs/DEVELOPMENT.md)** — Architecture, package layout, and how to extend the analyzer pipeline.
 - **[Pi extension](docs/PI_EXTENSION.md)** — Install SkillSpector as a Pi tool for scanning skills from inside agent sessions.
 
@@ -72,6 +75,11 @@ Run SkillSpector without installing Python by building it locally from the inclu
 ```bash
 make docker-build
 # or: docker build -t skillspector .
+# include release metadata for /health:
+# docker build \
+#   --build-arg SKILLSPECTOR_GIT_COMMIT="$(git rev-parse --short HEAD)" \
+#   --build-arg SKILLSPECTOR_SCHEMA_VERSION=none \
+#   -t skillspector .
 ```
 
 **Scan a local directory** by mounting your current directory into `/scan`, the container's working directory:
@@ -121,6 +129,34 @@ alias skillspector-docker='docker run --rm -v "$PWD:/scan" skillspector'
 skillspector-docker scan ./my-skill/ --no-llm
 ```
 
+**Run the Web/API service** with authentication:
+
+```bash
+docker run --rm \
+  -p 8765:8765 \
+  -e SKILLSPECTOR_AUTH_TOKEN='change-me' \
+  skillspector web --port 8765
+
+curl http://127.0.0.1:8765/health
+```
+
+**Run the remote upload MCP adapter** with a separate upload data port:
+
+```bash
+docker run --rm \
+  -p 8001:8001 \
+  -p 8765:8765 \
+  -e SKILLSPECTOR_AUTH_TOKEN='change-me' \
+  -e SKILLSPECTOR_MCP_UPLOAD_HOST=0.0.0.0 \
+  -e SKILLSPECTOR_MCP_UPLOAD_PORT=8765 \
+  -e SKILLSPECTOR_MCP_UPLOAD_PUBLIC_URL='http://127.0.0.1:8765' \
+  skillspector upload-mcp --port 8001
+```
+
+The container entrypoint keeps CLI usage unchanged. `web` dispatches to
+`skillspector-web --host 0.0.0.0`, and `upload-mcp` dispatches to
+`skillspector-upload-mcp --transport http --host 0.0.0.0`.
+
 ### Basic Usage
 
 ```bash
@@ -152,6 +188,88 @@ history. For local OpenAI-compatible models that do not return native structured
 choose `text_json` in the Structured output field and keep LLM concurrency at `1` for
 single-threaded local inference. `SKILLSPECTOR_WEB_MAX_UPLOAD_MB` sets the default
 upload limit.
+
+### Remote upload MCP adapter
+
+For remote or hosted use, run the additive upload-ticket MCP adapter instead
+of exposing the raw path-based `scan_skill(target)` tool. Keep upstream
+`skillspector mcp` for local stdio/loopback use; register only this adapter in
+remote MCP clients:
+
+```bash
+# Install with MCP support
+uv tool install --force 'skillspector[mcp] @ git+https://github.com/NVIDIA/skillspector.git'
+
+# Required before binding to a non-localhost HTTP interface
+export SKILLSPECTOR_AUTH_TOKEN='change-me'
+
+# Local stdio control plane
+skillspector-upload-mcp
+
+# HTTP control plane for remote callers
+skillspector-upload-mcp --transport http --host 0.0.0.0 --port 8001
+```
+
+This adapter is a separate layer over the scanner and does not expose
+`scan_skill`. It exposes compact control tools:
+
+- `skills_smoke`: health check and upload base URL.
+- `skills_create_upload_ticket`: creates a one-use HTTP `PUT` ticket.
+- `skills_scan_upload`: scans an uploaded artifact by `upload_id`.
+- `skills_get_report`: fetches a compact report summary, with optional raw report.
+
+Uploaded file bytes do not travel through MCP arguments. The AI calls
+`skills_create_upload_ticket`, uploads the skill file or archive to the returned
+HTTP URL with the returned `Authorization: Bearer ...` header, then calls
+`skills_scan_upload` with only the `upload_id`. Tickets are stored in memory,
+expire after at most 15 minutes, store only a SHA-256 hash of the bearer token,
+and are single-use after a successful upload. Completed uploads are retained
+temporarily for scanning and cleanup.
+
+HTTP MCP uses `Authorization: Bearer $SKILLSPECTOR_MCP_AUTH_TOKEN`; when that
+variable is unset it falls back to `SKILLSPECTOR_AUTH_TOKEN`. Binding HTTP MCP
+to a non-localhost interface without one of those tokens is rejected at startup.
+
+`SKILLSPECTOR_MCP_UPLOAD_HOST` and `SKILLSPECTOR_MCP_UPLOAD_PORT` control the
+HTTP upload listener. The default binds to `127.0.0.1` with an ephemeral port.
+When the upload listener is behind a reverse proxy or bound to `0.0.0.0`, set
+`SKILLSPECTOR_MCP_UPLOAD_PUBLIC_URL` to the externally reachable base URL and
+also configure Web/API auth with `SKILLSPECTOR_AUTH_TOKEN` or
+`SKILLSPECTOR_API_USERNAME` / `SKILLSPECTOR_API_PASSWORD`. The upload data
+listener rejects non-localhost binds without Web/API auth, even when MCP control
+plane auth is configured.
+
+### HTTP API
+
+The Web server also exposes the same upload-ticket flow as JSON endpoints:
+
+```bash
+export SKILLSPECTOR_AUTH_TOKEN='change-me'
+skillspector-web --host 0.0.0.0 --port 8765
+
+# 1. Create a one-use upload ticket
+curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"filename":"skill.zip","max_bytes":52428800}' \
+  http://127.0.0.1:8765/api/tickets
+
+# 2. PUT file bytes to the returned upload_url with returned headers
+
+# 3. Scan by upload_id
+curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"use_llm":false}' \
+  http://127.0.0.1:8765/api/scans/<upload_id>
+
+# 4. Fetch compact report
+curl -H "Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN" \
+  http://127.0.0.1:8765/api/reports/<report_id>
+```
+
+API authentication supports either `Authorization: Bearer $SKILLSPECTOR_AUTH_TOKEN`
+or HTTP Basic with `SKILLSPECTOR_API_USERNAME` and `SKILLSPECTOR_API_PASSWORD`.
+Binding the Web/API server to a non-localhost interface without API credentials
+is rejected at startup. Upload `PUT` requests use their own one-use ticket token.
 
 ### Output Formats
 
