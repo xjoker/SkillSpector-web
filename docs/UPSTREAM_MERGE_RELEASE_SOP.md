@@ -239,7 +239,7 @@ docker image ls ghcr.io/xjoker/skillspector-adapter --format '{{.Repository}}:{{
 
 ## 7. Commit 与线上构建
 
-发布镜像前必须先 commit 并推送，让 GitHub Actions 构建干净 commit：
+发布镜像前必须先 commit 并推送，让 GitHub Actions 能从干净 commit 构建：
 
 ```bash
 git status --short --branch
@@ -248,7 +248,7 @@ git commit -m "release: upstream merge and adapter image YYYYMMDD.N"
 git push origin main
 ```
 
-`CI` workflow 成功后会自动触发 `Container` workflow。`Container` workflow 会：
+在 GitHub Actions 手工运行 `Container` workflow。该 workflow 会：
 
 - 使用 `GITHUB_TOKEN` 推送 GHCR 镜像。
 - 推送 `ghcr.io/xjoker/skillspector-adapter:<VERSION>`、`:dev`、`:latest`。
@@ -263,9 +263,9 @@ git push origin main
 
 ## 8. GitHub Actions 注意事项
 
-- 不要假设 `GITHUB_TOKEN` 创建的 tag 会触发另一个 `on: push: tags` workflow。
-- 需要链式触发时，用 `gh workflow run <workflow>` 显式触发。
-- 本 fork 的正式镜像发布入口是 `Container` workflow，不是本机 `docker push`。
+- 本 fork 只保留手工触发的 `Container` workflow。
+- 不在 push/PR 上自动运行 lint/test/scorecard，避免浪费 Actions 资源。
+- 正式镜像发布入口是 `Container` workflow，不是本机 `docker push`。
 
 ## 9. 远端上线
 
